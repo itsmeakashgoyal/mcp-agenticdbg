@@ -106,7 +106,7 @@ Then run an example:
 
 Core dumps will be written to the current directory, `/var/crash/`, or as configured by `/proc/sys/kernel/core_pattern` (Linux).
 
-## Analyze with win_crashdbg
+## Analyze with TriagePilot
 
 Once you have a dump file, use the MCP tools:
 

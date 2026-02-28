@@ -1,16 +1,18 @@
 # TriagePilot
 
-**AI-powered, cross-platform crash dump triage for developers.**
+TriagePilot is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that brings intelligent crash dump analysis directly into your IDE. Connect it to **Cursor**, **VS Code**, or any MCP-compatible client, and ask questions about crash dumps in plain English. The assistant drives the debugger, locates faulting source code in your repo, performs root cause analysis, and can suggest fixes -- all without you ever opening a debugger manually.
 
-TriagePilot is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that brings intelligent crash dump analysis directly into your AI-powered IDE. Connect it to **Cursor**, **VS Code**, or any MCP-compatible client, and ask questions about crash dumps in plain English. The AI assistant drives the debugger, locates faulting source code in your repo, performs root cause analysis, and can even suggest fixes -- all without you ever opening a debugger manually.
+This project idea is inspired by [`mcp-windbg`](https://github.com/svnscha/mcp-windbg). Thanks to the `mcp-windbg` project for paving the way.
 
-**Supported platforms:**
+**Current support status:**
 
-| Platform | Debugger | Dump Types |
-|----------|----------|------------|
-| Windows  | CDB / WinDbg | `.dmp` (MiniDump / full dump) |
-| Linux    | GDB | Core dumps (`core.*`) |
-| macOS    | LLDB | Core dumps, `.crash` reports |
+| Platform | Debugger | Dump Types | Status |
+|----------|----------|------------|--------|
+| Windows  | CDB / WinDbg | `.dmp` (MiniDump / full dump) | Supported |
+| Linux    | GDB | Core dumps (`core.*`) | In progress |
+| macOS    | LLDB | Core dumps, `.crash` reports | In progress |
+
+> Linux and macOS dump triage support is in progress and not yet completed.
 
 Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information (PDB, DWARF).
 
@@ -19,7 +21,7 @@ Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler th
 ## Why TriagePilot?
 
 - **Zero debugger expertise required.** Ask "What caused this crash?" and get an answer, not a register dump.
-- **Cross-platform.** One tool for Windows, Linux, and macOS crashes. The backend auto-detects your platform.
+- **Platform roadmap.** Windows dump triage is supported now; Linux and macOS dump triage are in progress.
 - **Source-aware.** Point it at your repo and it finds the faulting function, even when debug symbols only have public names.
 - **AI-native.** Built as an MCP server so AI assistants can orchestrate multi-step triage autonomously.
 - **Secure.** Dangerous debugger commands are blocklisted. Rate limiting prevents runaway tool calls.
@@ -39,8 +41,9 @@ Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler th
 - [CLI Options](#cli-options)
 - [Environment Variables](#environment-variables)
 - [Example Crash Programs](#example-crash-programs)
-- [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -136,8 +139,8 @@ xcode-select --install
 ### From source
 
 ```bash
-git clone https://github.com/AkashGoyal2003/win_crashdbg.git
-cd win_crashdbg
+git clone https://github.com/itsmeakashgoyal/mcp-dumptriage.git
+cd mcp-dumptriage
 
 # (Optional) Create a virtual environment
 python -m venv .venv
@@ -160,17 +163,6 @@ pip install -e ".[langgraph]"
 ```
 
 This adds `langgraph`, `langchain-core`, and `langchain-openai` for the `auto_triage_dump` tool.
-
-### Migrating from win-crashdbg
-
-If you previously had the old `win-crashdbg` package installed:
-
-```bash
-pip uninstall win-crashdbg -y
-pip install -e .
-```
-
-Update your MCP config to use the new name (see [Configuration](#configuration)).
 
 ---
 
@@ -252,23 +244,15 @@ What caused the crash? Suggest a fix.
 
 ### Full triage workflow
 
-For a complete triage with PR creation:
+For a complete triage with root cause analysis and fix suggestions:
 
 ```text
 Use TriagePilot to analyze:
-- dump_path: C:\Users\me\Downloads\case-42\crash.dmp
-- symbols_path: C:\Users\me\Downloads\case-42\symbols
-- image_path: C:\Users\me\Downloads\case-42\bin\MyApp.exe
-- repo_path: C:\code\myapp
-- jira_id: APP-12345
+- dump_path: /path/to/crash.dmp
+- symbols_path: /path/to/symbols
+- repo_path: /path/to/myapp
 
-Return:
-1) exception code + faulting module/function
-2) full symbolized stack trace
-3) likely root cause
-4) concrete fixes in current repo and apply them
-5) verification steps
-6) create a PR once changes are finalized
+Return the exception info, stack trace, root cause, and suggest a fix.
 ```
 
 ### Guided prompt
@@ -396,49 +380,6 @@ Then ask TriagePilot to analyze the resulting dump.
 
 ---
 
-## Project Structure
-
-```
-triagepilot/
-├── src/
-│   └── triagepilot/
-│       ├── __init__.py             # Entry point, CLI
-│       ├── __main__.py             # python -m triagepilot
-│       ├── server.py               # MCP server: tools, prompts
-│       ├── config.py               # ServerConfig (pydantic-settings)
-│       ├── logging_config.py       # Structured logging (structlog)
-│       ├── backends/               # Debugger backends
-│       │   ├── __init__.py         # Factory, platform detection
-│       │   ├── base.py             # DebuggerSession ABC
-│       │   ├── cdb.py              # CDB/WinDbg (Windows)
-│       │   ├── lldb.py             # LLDB (macOS/Linux)
-│       │   └── gdb.py              # GDB (Linux)
-│       ├── tools/
-│       │   ├── debugger_tools.py   # Platform-agnostic tool handlers
-│       │   └── git_tools.py        # PR/patch handlers
-│       ├── graph/                  # LangGraph (optional)
-│       │   ├── state.py            # State schema
-│       │   ├── nodes.py            # Node functions
-│       │   ├── edges.py            # Edge logic
-│       │   └── graph.py            # Graph builder
-│       ├── prompts/
-│       │   └── dump-triage.prompt.md
-│       └── tests/
-│           ├── test_backends.py
-│           ├── test_cdb_session.py
-│           ├── test_helpers.py
-│           ├── test_git_tools.py
-│           └── test_config.py
-├── examples/                       # Cross-platform crash programs
-│   ├── build.ps1 / build.sh
-│   ├── crashdump.h
-│   └── *.cpp
-├── pyproject.toml
-└── README.md
-```
-
----
-
 ## Troubleshooting
 
 ### "Could not find cdb.exe" (Windows)
@@ -505,3 +446,29 @@ pip install -e ".[langgraph]"
 ```
 
 Set `TRIAGEPILOT_LLM_API_KEY` for LLM nodes.
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes (`git commit -m 'Add my feature'`)
+4. Push to the branch (`git push origin feature/my-feature`)
+5. Open a Pull Request
+
+### Running tests
+
+```bash
+pip install -e ".[langgraph]"
+pip install pytest
+pytest
+```
+
+---
+
+## License
+
+This project is licensed under the BSD 3-Clause License. See [LICENSE](LICENSE) for details.

@@ -75,6 +75,6 @@ $results | Format-Table -AutoSize
 Write-Host "Dump directory: $dumpDir"
 Write-Host "PDB  directory: $outDir"
 Write-Host ""
-Write-Host "To analyze a dump with win_crashdbg, use:" -ForegroundColor Cyan
-Write-Host "  open_windbg_dump  <path-to-.dmp>"
-Write-Host "  run_windbg_cmd    .ecxr; kv"
+Write-Host "To analyze a dump with TriagePilot, use:" -ForegroundColor Cyan
+Write-Host "  analyze_dump      <path-to-.dmp>"
+Write-Host "  run_debugger_cmd  .ecxr; kv"
