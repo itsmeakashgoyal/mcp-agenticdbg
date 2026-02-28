@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Type checking
+.mypy_cache/
+.pytype/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# Crash dumps and debug artifacts (don't commit test dumps)
+*.dmp
+*.mdmp
+*.hdmp
+*.crash
+core
+core.*
+!examples/*.cpp
+!examples/*.c
+!examples/*.h
+
+# Debug symbols
+*.pdb
+*.dSYM/
+*.dwarf
+
+# Build outputs (examples)
+examples/*.exe
+examples/*.o
+examples/*.obj
+examples/*.ilk
+examples/*.exp
+examples/*.lib
+examples/crash_example
+examples/crash_example.exe
+
+# Logs
+*.log
+
+# Distribution / packaging
+*.tar.gz
+*.whl
+
+# Environments / secrets
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Cursor / AI assistant
+.cursor/
+agent-transcripts/
+mcps/
+terminals/

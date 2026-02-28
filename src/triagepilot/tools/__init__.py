@@ -1,0 +1,51 @@
+"""Tool handler modules for triagepilot MCP server."""
+
+from .debugger_tools import (
+    handle_analyze_dump,
+    handle_open_dump,
+    handle_run_cmd,
+    handle_close_dump,
+    handle_list_dumps,
+    get_or_create_session,
+    close_session,
+    cleanup_all_sessions,
+    active_sessions,
+    active_session_count,
+    set_max_concurrent_sessions,
+    get_local_dumps_path,
+    locate_faulting_source,
+    validate_debugger_command,
+    validate_cdb_command,
+    _parse_faulting_module_function,
+    _extract_stack_functions,
+    _find_function_in_repo,
+)
+from .git_tools import (
+    handle_create_repo_pr,
+    handle_create_shared_patch,
+    _resolve_pr_body,
+)
+
+__all__ = [
+    "handle_analyze_dump",
+    "handle_open_dump",
+    "handle_run_cmd",
+    "handle_close_dump",
+    "handle_list_dumps",
+    "handle_create_repo_pr",
+    "handle_create_shared_patch",
+    "get_or_create_session",
+    "close_session",
+    "cleanup_all_sessions",
+    "active_sessions",
+    "active_session_count",
+    "set_max_concurrent_sessions",
+    "get_local_dumps_path",
+    "locate_faulting_source",
+    "validate_debugger_command",
+    "validate_cdb_command",
+    "_parse_faulting_module_function",
+    "_extract_stack_functions",
+    "_find_function_in_repo",
+    "_resolve_pr_body",
+]
