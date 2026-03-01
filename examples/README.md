@@ -33,6 +33,9 @@ Each example includes `crashdump.h`, which provides cross-platform crash dump su
 ### macOS
 - **Xcode Command Line Tools** or **Clang** (pre-installed on macOS)
 - Core dumps enabled: `ulimit -c unlimited`
+- One-time setup may be required:
+  - `launchctl limit core unlimited unlimited`
+  - `sudo mkdir -p /cores && sudo chmod 1777 /cores`
 
 ## Build
 
@@ -58,6 +61,10 @@ cd examples
 chmod +x build.sh
 ./build.sh
 ```
+
+Notes:
+- On macOS, `build.sh` prefers `clang++` by default.
+- Override compiler with `CXX=clang++ ./build.sh` (or `CXX=g++ ./build.sh`).
 
 Output for all platforms: executables with debug symbols in `build/out/`.
 
@@ -98,13 +105,21 @@ First, enable core dumps:
 ulimit -c unlimited
 ```
 
+On macOS, if no core file appears, also run:
+
+```bash
+launchctl limit core unlimited unlimited
+sudo mkdir -p /cores
+sudo chmod 1777 /cores
+```
+
 Then run an example:
 
 ```bash
 ./build/out/stack-overflow
 ```
 
-Core dumps will be written to the current directory, `/var/crash/`, or as configured by `/proc/sys/kernel/core_pattern` (Linux).
+Core dumps will be written to the current directory, `/var/crash/`, or as configured by `/proc/sys/kernel/core_pattern` (Linux). On macOS, default path is usually `/cores/core.<pid>`.
 
 ## Analyze with TriagePilot
 

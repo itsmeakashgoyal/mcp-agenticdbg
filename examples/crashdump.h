@@ -92,9 +92,12 @@ static void EnableCrashDumps(void)
  * POSIX (Linux / macOS) -- signal handlers for core dump generation
  * ====================================================================== */
 #include <signal.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/resource.h>
+
+static unsigned char _crashdump_altstack_mem[SIGSTKSZ * 4];
 
 static void _crashdump_signal_handler(int sig)
 {
@@ -116,14 +119,31 @@ static void EnableCrashDumps(void)
     struct rlimit rl;
     rl.rlim_cur = RLIM_INFINITY;
     rl.rlim_max = RLIM_INFINITY;
-    setrlimit(RLIMIT_CORE, &rl);
+    if (setrlimit(RLIMIT_CORE, &rl) != 0)
+        fprintf(stderr, "[crashdump] WARNING: setrlimit(RLIMIT_CORE) failed.\n");
 
-    signal(SIGSEGV, _crashdump_signal_handler);
-    signal(SIGABRT, _crashdump_signal_handler);
-    signal(SIGBUS,  _crashdump_signal_handler);
-    signal(SIGFPE,  _crashdump_signal_handler);
+    stack_t altstack;
+    memset(&altstack, 0, sizeof(altstack));
+    altstack.ss_sp = _crashdump_altstack_mem;
+    altstack.ss_size = sizeof(_crashdump_altstack_mem);
+    if (sigaltstack(&altstack, NULL) != 0)
+        fprintf(stderr, "[crashdump] WARNING: sigaltstack setup failed.\n");
 
-    fprintf(stderr, "[crashdump] Core dump handlers installed (ensure `ulimit -c unlimited`)\n");
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = _crashdump_signal_handler;
+    sa.sa_flags = SA_RESETHAND | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGBUS,  &sa, NULL);
+    sigaction(SIGFPE,  &sa, NULL);
+
+    fprintf(stderr, "[crashdump] Core dump handlers installed (ensure `ulimit -c unlimited`).\n");
+#ifdef __APPLE__
+    fprintf(stderr, "[crashdump] macOS tip: ensure `launchctl limit core unlimited unlimited` and writable `/cores`.\n");
+#endif
 }
 
 #endif /* _WIN32 */

@@ -31,7 +31,7 @@ static Connection *open_connection(const char *host, int fd)
     if (!c) return NULL;
 
     c->socket_fd  = fd;
-    strcpy_s(c->hostname, sizeof(c->hostname), host);
+    snprintf(c->hostname, sizeof(c->hostname), "%s", host);
     c->buffer_len = 256;
     c->recv_buffer = (int *)malloc(c->buffer_len * sizeof(int));
 

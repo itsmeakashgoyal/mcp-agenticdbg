@@ -31,7 +31,7 @@ class Dog : public Animal
 public:
     Dog(const char *name)
     {
-        strcpy_s(name_, sizeof(name_), name);
+        snprintf(name_, sizeof(name_), "%s", name);
         printf("  Dog(\"%s\") constructed at %p\n", name_, this);
     }
     ~Dog() override

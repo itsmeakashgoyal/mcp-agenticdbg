@@ -427,6 +427,15 @@ cat /proc/sys/kernel/core_pattern    # Linux
 ls /cores/                           # macOS
 ```
 
+On macOS, you may also need one-time system setup:
+
+```bash
+launchctl limit core unlimited unlimited
+sudo mkdir -p /cores
+sudo chmod 1777 /cores
+sysctl kern.coredump kern.corefile
+```
+
 ### Symbols not resolving on Windows
 
 Set `_NT_SYMBOL_PATH` in MCP config:
