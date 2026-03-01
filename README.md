@@ -1,38 +1,66 @@
-# TriagePilot
+# mcp-agenticdbg (TriagePilot)
 
-TriagePilot is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that brings intelligent crash dump analysis directly into your IDE. Connect it to **Cursor**, **VS Code**, or any MCP-compatible client, and ask questions about crash dumps in plain English. The assistant drives the debugger, locates faulting source code in your repo, performs root cause analysis, and can suggest fixes -- all without you ever opening a debugger manually.
+Grounding AI debugging in runtime truth for crash dumps.
 
-This project idea is inspired by [`mcp-windbg`](https://github.com/svnscha/mcp-windbg). Thanks to the `mcp-windbg` project for paving the way.
+`mcp-agenticdbg` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server `triagepilot` that lets AI assistants triage crashes using real debugger output, not guesswork from logs alone.
 
-**Current support status:**
+Connect it to Cursor, VS Code, or any MCP-compatible client and ask:
+
+- "What caused this crash?"
+- "Show the call stack for this dump."
+- "Find the faulting source line in my repo."
+
+The assistant can drive CDB/GDB/LLDB, extract crash context, map it to source, and optionally generate patch/PR artifacts.
+
+Inspired by [`mcp-windbg`](https://github.com/svnscha/mcp-windbg).
+
+## Key Insight
+
+Most engineering time is not spent writing code. It is spent understanding failures.
+
+AI coding assistants can write code fast, but when production crashes happen they still need runtime truth to explain:
+
+- what happened
+- where it happened
+- why it happened
+
+Without debugger-grounded execution context, AI triage loops on guess, add logs, rerun, repeat.
+
+## The Problem in AI-Augmented Debugging
+
+- Logs only show what you predicted you would need.
+- Postmortems without stack/module/thread context are slow.
+- Large/legacy codebases make manual fault localization expensive.
+- "Plausible" AI answers are risky when not grounded in debugger output.
+
+## The Solution: Agentic Crash-Dump Debugging
+
+TriagePilot gives your AI assistant controlled access to platform-native debuggers and crash triage tools over MCP.
+
+That means your assistant can move from "clever guesser" to "grounded debugger":
+
+1. Open dump/core/crash artifacts.
+2. Run analysis commands.
+3. Extract stack, module, thread, and crash metadata.
+4. Locate likely faulting source in your repository.
+5. Return root-cause-oriented explanations and next steps.
+
+## Current Status
 
 | Platform | Debugger | Dump Types | Status |
-|----------|----------|------------|--------|
-| Windows  | CDB / WinDbg | `.dmp` (MiniDump / full dump) | Supported |
-| Linux    | GDB | Core dumps (`core.*`) | In progress |
-| macOS    | LLDB | Core dumps, `.crash` reports | In progress |
+| --- | --- | --- | --- |
+| Windows | CDB / WinDbg | `.dmp` (minidump/full dump) | Supported |
+| Linux | GDB | `core`, `core.*`, `*.core` | In progress |
+| macOS | LLDB | `.crash`, `.ips`, core dumps | In progress |
 
-> Linux and macOS dump triage support is in progress and not yet completed.
-
-Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information (PDB, DWARF).
-
----
-
-## Why TriagePilot?
-
-- **Zero debugger expertise required.** Ask "What caused this crash?" and get an answer, not a register dump.
-- **Platform roadmap.** Windows dump triage is supported now; Linux and macOS dump triage are in progress.
-- **Source-aware.** Point it at your repo and it finds the faulting function, even when debug symbols only have public names.
-- **AI-native.** Built as an MCP server so AI assistants can orchestrate multi-step triage autonomously.
-- **Secure.** Dangerous debugger commands are blocklisted. Rate limiting prevents runaway tool calls.
-- **Extensible.** Optional LangGraph integration enables fully autonomous end-to-end triage with LLM-powered root cause analysis and fix suggestions.
-
----
+Linux and macOS paths are implemented but still evolving. Treat them as in-progress compared with Windows.
+Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [How It Works](#how-it-works)
+- [Why It Stands Out](#why-it-stands-out)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -41,43 +69,45 @@ Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler th
 - [CLI Options](#cli-options)
 - [Environment Variables](#environment-variables)
 - [Example Crash Programs](#example-crash-programs)
+- [Safety Model](#safety-model)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
 
----
-
 ## Quick Start
 
 ```bash
-# 1. Install
+# 1) Install
 pip install -e .
 
-# 2. Add to your MCP config (Cursor / VS Code)
-# See Configuration section below
+# 2) Verify
+triagepilot --help
 
-# 3. Ask your AI assistant
-"Analyze the crash dump at /path/to/crash.dmp"
+# 3) Add MCP config (Cursor/VS Code)
+# see Configuration section
+
+# 4) Ask your assistant
+"Analyze /path/to/crash.dmp and explain the root cause."
 ```
-
----
 
 ## How It Works
 
-```
-You (in Cursor / VS Code)
+```text
+You (Cursor / VS Code)
   |
-  |  "What caused this crash?"
+  | "Why did this crash happen?"
   v
-AI Assistant  --->  TriagePilot MCP Server  --->  Debugger Backend
-                                                     |
-                        +----------------------------+----------------------------+
-                        |                            |                            |
-                   CDB (Windows)               GDB (Linux)                LLDB (macOS)
-                        |                            |                            |
-                   .dmp files                  core dumps                 .crash / core dumps
+AI Assistant
+  |
+  v
+TriagePilot MCP Server
+  |
+  +--> CDB (Windows) --> .dmp
+  +--> GDB (Linux)   --> core dumps
+  +--> LLDB (macOS)  --> .crash / .ips / core dumps
 ```
 
+Flow:
 TriagePilot acts as a bridge between your AI assistant and the platform-native debugger. When you ask the AI to analyze a crash:
 
 1. **The AI calls TriagePilot's MCP tools** (`analyze_dump`, `run_debugger_cmd`, etc.)
@@ -86,25 +116,32 @@ TriagePilot acts as a bridge between your AI assistant and the platform-native d
 4. **TriagePilot locates the faulting source** in your local repo using a multi-level search (debug info -> symbol name -> stack trace)
 5. **The AI interprets the results** and explains the root cause, suggests fixes, and can create a PR
 
----
+## Why It Stands Out
+
+- Runtime-grounded crash analysis over MCP.
+- Source-aware fault localization from debugger symbols/frames.
+- One-shot and session-based workflows (`analyze_dump` or `open_dump` + iterative commands).
+- Optional autonomous graph-based flow (`auto_triage_dump`) when LangGraph extra is installed.
+- Practical delivery tooling: create patch markdown or repo PR from results.
 
 ## Prerequisites
 
-### Python 3.10 or later
+### Python
+
+- Python `3.10+`
 
 ```bash
 python --version
 ```
 
-### Debugger (one per platform)
+### Debugger (platform dependent)
 
 #### Windows: CDB / WinDbg
 
-Install via one of:
-- **Microsoft Store:** Search for [WinDbg](https://apps.microsoft.com/detail/9pgjgd53tn86) and click Install.
-- **Windows SDK:** Download the [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/) and select "Debugging Tools for Windows".
+Install via:
 
-CDB also works with **Clang-compiled** Windows binaries when Clang produces PDB debug info.
+- [WinDbg (Microsoft Store)](https://apps.microsoft.com/detail/9pgjgd53tn86)
+- [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/) (`Debugging Tools for Windows`)
 
 #### Linux: GDB
 
@@ -114,12 +151,13 @@ sudo apt install gdb
 
 # Fedora / RHEL
 sudo dnf install gdb
-
-# Arch
-sudo pacman -S gdb
 ```
 
-Enable core dumps: `ulimit -c unlimited`
+Enable core dumps:
+
+```bash
+ulimit -c unlimited
+```
 
 #### macOS: LLDB
 
@@ -127,50 +165,34 @@ Enable core dumps: `ulimit -c unlimited`
 xcode-select --install
 ```
 
-### Cursor or VS Code
+### MCP Client
 
-- [Cursor](https://www.cursor.com/) (recommended)
+- [Cursor](https://www.cursor.com/)
 - [VS Code](https://code.visualstudio.com/) with MCP support
-
----
 
 ## Installation
 
-### From source
-
 ```bash
-git clone https://github.com/itsmeakashgoyal/mcp-dumptriage.git
-cd mcp-dumptriage
+git clone https://github.com/itsmeakashgoyal/mcp-agenticdbg.git
+cd mcp-agenticdbg
 
-# (Optional) Create a virtual environment
 python -m venv .venv
-# Windows:
-.venv\Scripts\Activate.ps1
-# Linux / macOS:
-source .venv/bin/activate
+source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 
-# Install
 pip install -e .
-
-# Verify
-triagepilot --help
 ```
 
-### With LangGraph support (autonomous triage)
+### Optional: LangGraph Autonomous Triage
 
 ```bash
 pip install -e ".[langgraph]"
 ```
 
-This adds `langgraph`, `langchain-core`, and `langchain-openai` for the `auto_triage_dump` tool.
-
----
+This enables the `auto_triage_dump` tool.
 
 ## Configuration
 
-### Minimal MCP config
-
-The server auto-detects the platform and debugger. This works for all platforms:
+### Minimal MCP Config
 
 ```json
 {
@@ -184,7 +206,7 @@ The server auto-detects the platform and debugger. This works for all platforms:
 }
 ```
 
-### Windows (with Microsoft symbol server)
+### Windows + Microsoft Symbol Server
 
 ```json
 {
@@ -201,7 +223,7 @@ The server auto-detects the platform and debugger. This works for all platforms:
 }
 ```
 
-### With custom options
+### Custom Args
 
 ```json
 {
@@ -210,95 +232,83 @@ The server auto-detects the platform and debugger. This works for all platforms:
       "type": "stdio",
       "command": "python",
       "args": [
-        "-m", "triagepilot",
-        "--symbols-path", "/path/to/symbols",
-        "--repo-path", "/path/to/your/repo",
-        "--timeout", "60"
+        "-m",
+        "triagepilot",
+        "--debugger-type",
+        "auto",
+        "--symbols-path",
+        "/path/to/symbols",
+        "--repo-path",
+        "/path/to/repo",
+        "--timeout",
+        "60"
       ]
     }
   }
 }
 ```
 
-### Where to put the config
+Config file locations:
 
-- **Cursor:** Settings (Ctrl+Shift+J) -> MCP -> "+ Add new global MCP server", or `.cursor/mcp.json` in your project root.
-- **VS Code:** `.vscode/mcp.json` in your project root (use `"servers"` instead of `"mcpServers"`).
-
----
+- Cursor: `.cursor/mcp.json` or global MCP settings
+- VS Code: `.vscode/mcp.json` (uses `"servers"` key)
 
 ## Usage
 
-### One-shot analysis (recommended)
-
-Use `analyze_dump` for most cases. It runs a full analysis in one call:
+### One-Shot Triage (recommended)
 
 ```text
-Use TriagePilot to analyze this crash:
+Analyze this crash dump:
 - dump_path: /path/to/crash.dmp
 - symbols_path: /path/to/symbols
-- repo_path: /code/myapp
+- repo_path: /path/to/repo
 
-What caused the crash? Suggest a fix.
+Return crash summary, call stack, likely root cause, and fix suggestions.
 ```
 
-### Full triage workflow
-
-For a complete triage with root cause analysis and fix suggestions:
+### Session Mode
 
 ```text
-Use TriagePilot to analyze:
-- dump_path: /path/to/crash.dmp
-- symbols_path: /path/to/symbols
-- repo_path: /path/to/myapp
-
-Return the exception info, stack trace, root cause, and suggest a fix.
+1) open_dump
+2) run_debugger_cmd (iterate as needed)
+3) close_dump
 ```
 
-### Guided prompt
+### Natural Language Prompts
 
-Use the built-in `/dump-triage` prompt in Cursor for a structured, step-by-step workflow.
+| You ask | TriagePilot does |
+| --- | --- |
+| "List crash dumps on this machine" | Runs `list_dumps` |
+| "Analyze /tmp/core.1234" | Runs full analysis (`analyze_dump`) |
+| "Show me thread list and modules" | Uses debugger commands + structured output |
+| "Find the faulting source in my repo" | Attempts source localization |
+| "Create PR with these fixes" | Uses `create_repo_pr` workflow |
 
-### Natural language
+### Prompt Template
 
-Once configured, just ask naturally:
+Use built-in MCP prompt: `dump-triage`.
 
-| What you can say | What happens |
-|---|---|
-| "List crash dumps on my system" | Finds dump files in the default directory |
-| "Analyze the crash dump at /path/to/crash.dmp" | Full crash analysis with stack traces |
-| "What caused this crash?" | Root cause analysis |
-| "Show me the call stack" | Runs the debugger's stack trace command |
-| "Run `!analyze -v` on the current dump" | Executes a specific debugger command |
-| "Close the dump" | Releases debugger resources |
-
-### Autonomous triage (LangGraph)
-
-With the `langgraph` extra and an LLM API key:
+### Autonomous Triage (optional extra)
 
 ```bash
 pip install -e ".[langgraph]"
 export TRIAGEPILOT_LLM_API_KEY="sk-..."
 ```
 
-Then use `auto_triage_dump` for fully autonomous end-to-end analysis: debugger analysis -> metadata extraction -> source lookup -> LLM root cause analysis -> fix suggestions -> PR/patch creation.
-
----
+Then call `auto_triage_dump` for debugger analysis + LLM reasoning + optional PR/patch generation.
 
 ## Available Tools
 
 | Tool | Description |
-|---|---|
-| `analyze_dump` | One-shot crash dump analysis. Runs platform-appropriate analysis and returns crash info, stack trace, faulting source, modules, and threads. |
-| `list_dumps` | List crash dump files in a directory. Auto-detects platform-appropriate file types. |
-| `open_dump` | Open a crash dump and run initial analysis. |
-| `run_debugger_cmd` | Execute any debugger command. Includes security blocklist and rate limiting. |
-| `close_dump` | Close a dump session and free resources. |
-| `create_repo_pr` | Create commit/push/PR from local repo changes. |
-| `create_shared_patch` | Create a markdown patch for shared/gitignored changes. |
-| `auto_triage_dump` | *(langgraph extra)* Autonomous end-to-end triage with LLM analysis. |
-
----
+| --- | --- |
+| `analyze_dump` | One-shot crash dump analysis with stack/modules/threads/source lookup. |
+| `open_dump` | Open dump and initialize analysis session. |
+| `run_debugger_cmd` | Execute debugger command on active session. |
+| `close_dump` | Close active dump session. |
+| `list_dumps` | Discover dump files from platform-aware paths/patterns. |
+| `create_repo_pr` | Create commit + branch + push + GitHub PR from local repo changes. |
+| `create_shared_patch` | Generate markdown patch plan for shared/gitignored paths. |
+| `auto_triage_dump` | Optional (`langgraph` extra): autonomous end-to-end triage flow. |
 
 ## CLI Options
 
@@ -324,7 +334,7 @@ python -m triagepilot [OPTIONS]
 
 ## Environment Variables
 
-All settings use the `TRIAGEPILOT_` prefix:
+Prefix: `TRIAGEPILOT_`
 
 | Variable | Default | Description |
 |---|---|---|
@@ -345,9 +355,7 @@ All settings use the `TRIAGEPILOT_` prefix:
 | `TRIAGEPILOT_LANGSMITH_PROJECT` | `triagepilot` | LangSmith project name |
 | `TRIAGEPILOT_MAX_RETRIES` | `3` | Max retries for LangGraph analysis nodes |
 
-CLI arguments override environment variables.
-
----
+CLI args override env vars.
 
 ## Example Crash Programs
 
@@ -411,11 +419,7 @@ Increase timeout (often needed for first-time symbol downloads):
 triagepilot --timeout 120
 ```
 
-### "Command blocked for security reasons"
-
-Intentional -- dangerous commands are blocklisted. Run the debugger directly if you need a blocked command.
-
-### No core dumps generated (Linux / macOS)
+### No core dumps on Linux/macOS
 
 ```bash
 ulimit -c unlimited
@@ -423,31 +427,26 @@ cat /proc/sys/kernel/core_pattern    # Linux
 ls /cores/                           # macOS
 ```
 
-### Symbols not resolving (Windows)
+### Symbols not resolving on Windows
 
-Set `_NT_SYMBOL_PATH` in your MCP config:
+Set `_NT_SYMBOL_PATH` in MCP config:
 
 ```json
-"env": {
-  "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
+{
+  "env": {
+    "_NT_SYMBOL_PATH": "SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
+  }
 }
 ```
 
-### MCP server not appearing in IDE
+### `auto_triage_dump` missing
 
-1. Check config file location (`.cursor/mcp.json` or `.vscode/mcp.json`).
-2. Restart your IDE.
-3. Verify `python` is on your PATH, or use the full path to the Python executable.
-
-### auto_triage_dump tool not showing
+Install the extra and set LLM key:
 
 ```bash
 pip install -e ".[langgraph]"
+export TRIAGEPILOT_LLM_API_KEY="sk-..."
 ```
-
-Set `TRIAGEPILOT_LLM_API_KEY` for LLM nodes.
-
----
 
 ## Contributing
 
@@ -466,8 +465,6 @@ pip install -e ".[langgraph]"
 pip install pytest
 pytest
 ```
-
----
 
 ## License
 
