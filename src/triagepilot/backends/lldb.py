@@ -2,7 +2,6 @@
 
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +14,7 @@ from .base import DebuggerError, DebuggerSession
 logger = logging.getLogger(__name__)
 
 COMMAND_MARKER = "script print('LLDB_COMMAND_COMPLETED_MARKER')"
-COMMAND_MARKER_PATTERN = re.compile(r"LLDB_COMMAND_COMPLETED_MARKER")
+COMMAND_MARKER_TOKEN = "LLDB_COMMAND_COMPLETED_MARKER"
 
 DEFAULT_LLDB_PATHS = [
     "/usr/bin/lldb",
@@ -66,12 +65,10 @@ class LLDBSession(DebuggerSession):
             raise LLDBError("Could not find lldb. Please install LLDB or provide a valid path.")
 
         cmd_args = [self.debugger_path, "--no-use-colors"]
-
         if self.image_path:
             cmd_args.extend([self.image_path, "-c", self.dump_path])
         else:
             cmd_args.extend(["-c", self.dump_path])
-
         if additional_args:
             cmd_args.extend(additional_args)
 
@@ -87,21 +84,26 @@ class LLDBSession(DebuggerSession):
         except Exception as e:
             raise LLDBError(f"Failed to start LLDB process: {e}")
 
-        self.output_lines: List[str] = []
-        self.lock = threading.Lock()
-        self.command_lock = threading.Lock()
-        self.ready_event = threading.Event()
+        # Output collection / delimiting
+        self._buffer: List[str] = []
+        self._lock = threading.Lock()
+        self._command_lock = threading.Lock()
+        self._ready_event = threading.Event()
+        self._marker_seen = False
+        self._marker_seen_time = 0.0
         self._last_output_time = time.monotonic()
-        self.reader_thread = threading.Thread(target=self._read_output)
-        self.reader_thread.daemon = True
-        self.reader_thread.start()
 
+        self._reader_thread = threading.Thread(target=self._read_output, name="lldb-output-reader", daemon=True)
+        self._reader_thread.start()
+
+        # Prime the session so we can safely send future commands.
         try:
-            self._wait_for_prompt(timeout=self.timeout)
-        except (LLDBError, DebuggerError):
+            self._wait_for_ready(timeout=self.timeout)
+        except Exception:
             self.shutdown()
             raise LLDBError("LLDB initialization timed out")
 
+        # Apply session configuration via wrapped commands (ensures proper output ordering).
         if symbols_path:
             for path in symbols_path.split(":"):
                 path = path.strip()
@@ -110,7 +112,8 @@ class LLDBSession(DebuggerSession):
 
         if initial_commands:
             for cmd in initial_commands:
-                self.send_command(cmd)
+                if cmd:
+                    self.send_command(cmd)
 
     # -- DebuggerSession abstract methods -----------------------------------
 
@@ -161,44 +164,58 @@ class LLDBSession(DebuggerSession):
 
     # -- LLDB-specific helpers ----------------------------------------------
 
-    def _read_output(self):
+    def _read_output(self) -> None:
         if not self.process or not self.process.stdout:
             return
-        buffer: List[str] = []
         try:
-            for line in self.process.stdout:
-                line = line.rstrip()
+            for raw_line in self.process.stdout:
+                line = raw_line.rstrip("\n").rstrip("\r")
                 logger.debug("LLDB > %s", line)
-                with self.lock:
+                with self._lock:
                     self._last_output_time = time.monotonic()
-                    buffer.append(line)
-                    if COMMAND_MARKER_PATTERN.search(line):
-                        if buffer and COMMAND_MARKER_PATTERN.search(buffer[-1]):
-                            buffer.pop()
-                        self.output_lines = buffer
-                        buffer = []
-                        self.ready_event.set()
+                    self._buffer.append(line)
+                    if COMMAND_MARKER_TOKEN in line:
+                        self._marker_seen = True
+                        self._marker_seen_time = time.monotonic()
+                        self._ready_event.set()
         except (IOError, ValueError) as e:
             logger.error("LLDB output reader error: %s", e)
 
-    def _wait_for_prompt(self, timeout=None):
-        try:
-            self.ready_event.clear()
-            self.process.stdin.write(f"{COMMAND_MARKER}\n")
-            self.process.stdin.flush()
-            if not self.ready_event.wait(timeout=timeout or self.timeout):
-                raise LLDBError("Timed out waiting for LLDB prompt")
-        except IOError as e:
-            raise LLDBError(f"Failed to communicate with LLDB: {e}")
+    def _wait_for_ready(self, timeout: Optional[int] = None) -> None:
+        # Ensure we can round-trip a simple command.
+        self.send_command("version", timeout=timeout or self.timeout)
+
+    def _drain_until_quiet(self, *, min_grace_s: float = 0.05, idle_s: float = 0.05, max_grace_s: float = 0.6) -> None:
+        """After marker is observed, wait for LLDB to finish emitting output.
+
+        On some LLDB builds, a command's stdout may arrive slightly after a
+        subsequent marker. We mitigate by waiting until output is quiet.
+        """
+        start = time.monotonic()
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                last_out = self._last_output_time
+                marker_time = self._marker_seen_time
+            since_marker = now - marker_time if marker_time else 0.0
+            if since_marker >= min_grace_s and (now - last_out) >= idle_s:
+                return
+            if (now - start) >= max_grace_s:
+                return
+            time.sleep(0.02)
 
     def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
-        if not self.process:
+        if not self.process or not self.process.stdin:
             raise LLDBError("LLDB process is not running")
 
-        with self.command_lock:
-            self.ready_event.clear()
-            with self.lock:
-                self.output_lines = []
+        fixed_timeout = timeout if timeout is not None else self.timeout
+
+        with self._command_lock:
+            self._ready_event.clear()
+            with self._lock:
+                self._buffer = []
+                self._marker_seen = False
+                self._marker_seen_time = 0.0
 
             try:
                 self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
@@ -206,21 +223,34 @@ class LLDBSession(DebuggerSession):
             except IOError as e:
                 raise LLDBError(f"Failed to send command: {e}")
 
-            fixed_timeout = timeout if timeout is not None else self.timeout
-            if not self.ready_event.wait(timeout=fixed_timeout):
+            if not self._ready_event.wait(timeout=fixed_timeout):
                 raise LLDBError(f"Command timed out after {fixed_timeout} seconds: {command}")
 
-            with self.lock:
-                result = self.output_lines.copy()
-                self.output_lines = []
-            return result
+            # Give LLDB a brief chance to finish emitting command output after the marker.
+            self._drain_until_quiet()
+
+            with self._lock:
+                lines = list(self._buffer)
+                self._buffer = []
+
+            # Strip the marker line(s) from output.
+            cleaned: List[str] = []
+            for line in lines:
+                if COMMAND_MARKER_TOKEN in line:
+                    before = line.split(COMMAND_MARKER_TOKEN, 1)[0].rstrip()
+                    if before:
+                        cleaned.append(before)
+                    continue
+                cleaned.append(line)
+            return cleaned
 
     def shutdown(self):
         try:
             if self.process and self.process.poll() is None:
                 try:
-                    self.process.stdin.write("quit\n")
-                    self.process.stdin.flush()
+                    if self.process.stdin:
+                        self.process.stdin.write("quit\n")
+                        self.process.stdin.flush()
                     self.process.wait(timeout=2)
                 except Exception:
                     pass
