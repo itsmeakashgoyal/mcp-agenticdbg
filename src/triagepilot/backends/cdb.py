@@ -3,10 +3,11 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .base import DebuggerError, DebuggerSession
 
@@ -17,11 +18,16 @@ SLOW_COMMAND_PREFIXES = (
     "!analyze",
     ".symfix",
     ".sympath",
+    "~*kb",
+    "~*k",
+    "vertarget",
+    "!peb",
+    "!address",
 )
 
 PROMPT_REGEX = re.compile(r"^\d+:\d+>\s*$")
-COMMAND_MARKER = ".echo COMMAND_COMPLETED_MARKER"
-COMMAND_MARKER_PATTERN = re.compile(r"COMMAND_COMPLETED_MARKER")
+COMMAND_MARKER_TOKEN = "CDB_DONE_A7F3E9B2D1C4"
+COMMAND_MARKER = f".echo {COMMAND_MARKER_TOKEN}"
 
 DEFAULT_CDB_PATHS = [
     r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
@@ -32,6 +38,9 @@ DEFAULT_CDB_PATHS = [
     os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\cdbX86.exe"),
     os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\cdbARM64.exe"),
 ]
+
+# Maximum wall-clock time for any single command (10 minutes).
+_MAX_WALL_CLOCK_S = 600
 
 
 class CDBError(DebuggerError):
@@ -103,14 +112,24 @@ class CDBSession(DebuggerSession):
         except Exception as e:
             raise CDBError(f"Failed to start CDB process: {e}")
 
-        self.output_lines: List[str] = []
-        self.lock = threading.Lock()
-        self.command_lock = threading.Lock()
-        self.ready_event = threading.Event()
+        # Output collection / delimiting
+        self._buffer: List[str] = []
+        self._lock = threading.Lock()
+        self._command_lock = threading.Lock()
+        self._ready_event = threading.Event()
+        self._marker_seen = False
+        self._marker_seen_time = 0.0
         self._last_output_time = time.monotonic()
-        self.reader_thread = threading.Thread(target=self._read_output)
-        self.reader_thread.daemon = True
-        self.reader_thread.start()
+
+        self._reader_thread = threading.Thread(
+            target=self._read_output, name="cdb-output-reader", daemon=True,
+        )
+        self._reader_thread.start()
+
+        # Backward-compat aliases used by _wait_for_prompt / shutdown
+        self.lock = self._lock
+        self.command_lock = self._command_lock
+        self.ready_event = self._ready_event
 
         try:
             self._wait_for_prompt(timeout=self.timeout)
@@ -152,6 +171,9 @@ class CDBSession(DebuggerSession):
         for path in DEFAULT_CDB_PATHS:
             if os.path.isfile(path):
                 return path
+        found = shutil.which("cdb")
+        if found:
+            return found
         return None
 
     @staticmethod
@@ -173,6 +195,224 @@ class CDBSession(DebuggerSession):
         if os.path.isdir(default_path):
             return default_path
         return None
+
+    # -- DebuggerSession rich-analysis overrides ----------------------------
+
+    def run_crash_analysis(self) -> str:
+        """Produce a rich multi-section crash report.
+
+        Combines last-event, full analysis, backtraces, registers, modules,
+        and target info into a single string for downstream triage.
+        """
+        sections: List[str] = []
+
+        def _try(label: str, cmd: str, cmd_timeout: Optional[int] = None) -> None:
+            try:
+                out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
+                if out:
+                    sections.append(f"=== {label} ===")
+                    sections.extend(out)
+                    sections.append("")
+            except CDBError as exc:
+                logger.debug("run_crash_analysis: %s failed: %s", label, exc)
+
+        _try("Last Event", ".lastevent", 10)
+        _try("Crash Analysis", "!analyze -v")           # slow, activity-based
+        _try("Backtrace (current thread)", "kb", 15)
+        _try("All Thread Backtraces", "~*kb")            # slow
+        _try("Registers", "r", 15)
+        _try("Loaded Modules", "lm")
+        _try("Target Info", "vertarget", 10)
+
+        return "\n".join(sections)
+
+    def get_crash_summary(self) -> Dict[str, Any]:
+        """Return a structured crash summary.
+
+        Keys in the returned dict:
+
+        * ``signal``        — crash description string (from ``.lastevent``)
+        * ``crash_frame``   — raw frame info lines
+        * ``backtrace``     — list of backtrace lines (crashing thread)
+        * ``threads``       — raw all-thread backtraces
+        * ``registers``     — dict mapping register name → value
+        """
+        summary: Dict[str, Any] = {
+            "signal": None,
+            "crash_frame": [],
+            "backtrace": [],
+            "threads": [],
+            "registers": {},
+        }
+
+        try:
+            summary["signal"] = "\n".join(
+                self.send_command(".lastevent", timeout=10)
+            )
+        except CDBError:
+            pass
+
+        try:
+            summary["crash_frame"] = self.send_command(".ecxr", timeout=10)
+        except CDBError:
+            pass
+
+        try:
+            summary["backtrace"] = self.send_command("kb", timeout=self.timeout)
+        except CDBError:
+            pass
+
+        try:
+            summary["threads"] = self.send_command("~*kb", timeout=self.timeout)
+        except CDBError:
+            pass
+
+        try:
+            reg_lines = self.send_command("r", timeout=15)
+            for line in reg_lines:
+                # CDB register output: "rax=0000000000000000 rbx=..."
+                for token in line.split():
+                    if "=" in token:
+                        name, _, val = token.partition("=")
+                        name = name.strip()
+                        val = val.strip()
+                        if name:
+                            summary["registers"][name] = val
+        except CDBError:
+            pass
+
+        return summary
+
+    def get_thread_backtraces(self, max_frames: int = 100) -> List[Dict[str, Any]]:
+        """Return per-thread backtraces as a list of structured dicts.
+
+        Each dict has ``id``, ``raw`` (backtrace text for that thread).
+        """
+        try:
+            raw = self.send_command("~*kb", timeout=self.timeout)
+        except CDBError as exc:
+            return [{"error": str(exc)}]
+
+        # Split output into per-thread sections.
+        # CDB ~*kb thread headers look like:
+        #   "   0  Id: 1234.5678 Suspend: 1 Teb: ..."
+        #   ".  1  Id: ..."
+        #   "#  2  Id: ..."
+        _THREAD_HDR = re.compile(r"^[\s.#*]+\d+\s+Id:")
+        threads: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+        for line in raw:
+            if _THREAD_HDR.match(line):
+                if current is not None:
+                    threads.append(current)
+                current = {"id": line.strip(), "raw": [line]}
+            elif current is not None:
+                current["raw"].append(line)
+        if current is not None:
+            threads.append(current)
+
+        if not threads:
+            threads = [{"id": "all", "raw": raw}]
+
+        for t in threads:
+            t["raw"] = "\n".join(t["raw"])
+
+        return threads
+
+    def get_frame_locals(self, frame_num: int = 0) -> Dict[str, Any]:
+        """Return local variables and arguments for *frame_num*."""
+        out: Dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
+        try:
+            self.send_command(f".frame {frame_num}", timeout=10)
+            locals_out = self.send_command("dv /t", timeout=10)
+            out["raw"] = "\n".join(locals_out)
+            out["locals"] = locals_out
+        except CDBError as exc:
+            out["error"] = str(exc)
+        return out
+
+    def get_variable(self, expr: str) -> Optional[str]:
+        """Evaluate *expr* in the current frame.
+
+        Tries ``??`` (C++ typed evaluation) first, then falls back to
+        ``?`` (MASM expression evaluation).
+        """
+        # Try C++ typed evaluation
+        try:
+            out = self.send_command(f"?? {expr}", timeout=10)
+            for line in out:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("Couldn't resolve"):
+                    return stripped
+        except CDBError:
+            pass
+        # Fallback: MASM expression evaluation
+        try:
+            out = self.send_command(f"? {expr}", timeout=10)
+            for line in out:
+                stripped = line.strip()
+                if stripped:
+                    return stripped
+        except CDBError:
+            pass
+        return None
+
+    def inspect_memory(self, address: str, length: int = 64, unit: str = "b") -> str:
+        """Hex-dump *length* bytes at *address*."""
+        out = self.send_command(f"db {address} L{length}", timeout=15)
+        return "\n".join(out)
+
+    def get_disassembly(
+        self,
+        location: Optional[str] = None,
+        n_instructions: int = 30,
+    ) -> str:
+        """Disassemble around the crash point (or *location*)."""
+        if location:
+            cmd = f"u {location} L{n_instructions}"
+        else:
+            cmd = f"u @rip L{n_instructions}"
+        try:
+            out = self.send_command(cmd, timeout=15)
+            return "\n".join(out)
+        except CDBError:
+            pass
+        # Fallback: try unassemble function at current IP
+        try:
+            out = self.send_command("uf @rip", timeout=15)
+            return "\n".join(out)
+        except CDBError as exc:
+            return f"disassembly failed: {exc}"
+
+    def get_all_registers(self) -> str:
+        """Return all register values."""
+        try:
+            out = self.send_command("r", timeout=15)
+            return "\n".join(out)
+        except CDBError as exc:
+            return f"register read failed: {exc}"
+
+    def get_mapped_memory(self) -> str:
+        """Return process virtual address space map."""
+        try:
+            out = self.send_command("!address", timeout=self.timeout)
+            return "\n".join(out)
+        except CDBError as exc:
+            return f"memory map failed: {exc}"
+
+    def get_inferior_info(self) -> str:
+        """Return binary/OS info about the target."""
+        lines: List[str] = []
+        for label, cmd in (("Target Info", "vertarget"), ("Process Environment", "!peb")):
+            try:
+                out = self.send_command(cmd, timeout=15)
+                if out:
+                    lines.append(f"=== {label} ===")
+                    lines.extend(out)
+                    lines.append("")
+            except CDBError:
+                pass
+        return "\n".join(lines)
 
     # -- CDB-specific helpers -----------------------------------------------
 
@@ -217,33 +457,61 @@ class CDBSession(DebuggerSession):
         """
         self.send_command(".symopt+ 0x880000")
 
-    def _read_output(self):
+    def _read_output(self) -> None:
         """Background thread to continuously read CDB output."""
         if not self.process or not self.process.stdout:
             return
-        buffer: List[str] = []
         try:
-            for line in self.process.stdout:
-                line = line.rstrip()
+            for raw_line in self.process.stdout:
+                line = raw_line.rstrip("\n").rstrip("\r")
                 logger.debug("CDB > %s", line)
-                with self.lock:
+                with self._lock:
                     self._last_output_time = time.monotonic()
-                    buffer.append(line)
-                    if COMMAND_MARKER_PATTERN.search(line):
-                        if buffer and COMMAND_MARKER_PATTERN.search(buffer[-1]):
-                            buffer.pop()
-                        self.output_lines = buffer
-                        buffer = []
-                        self.ready_event.set()
+                    if COMMAND_MARKER_TOKEN in line:
+                        # Don't append the marker line itself.
+                        self._marker_seen = True
+                        self._marker_seen_time = time.monotonic()
+                        self._ready_event.set()
+                    else:
+                        self._buffer.append(line)
         except (IOError, ValueError) as e:
             logger.error("CDB output reader error: %s", e)
 
+    def _drain_until_quiet(
+        self,
+        *,
+        min_grace_s: float = 0.05,
+        idle_s: float = 0.05,
+        max_grace_s: float = 0.6,
+    ) -> None:
+        """After marker is observed, wait for CDB to finish emitting output.
+
+        On some builds, a command's stdout may arrive slightly after the
+        subsequent marker echo.  We mitigate by waiting until output is quiet.
+        """
+        start = time.monotonic()
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                last_out = self._last_output_time
+                marker_time = self._marker_seen_time
+            since_marker = now - marker_time if marker_time else 0.0
+            if since_marker >= min_grace_s and (now - last_out) >= idle_s:
+                return
+            if (now - start) >= max_grace_s:
+                return
+            time.sleep(0.02)
+
     def _wait_for_prompt(self, timeout=None):
         try:
-            self.ready_event.clear()
+            self._ready_event.clear()
+            with self._lock:
+                self._buffer = []
+                self._marker_seen = False
+                self._marker_seen_time = 0.0
             self.process.stdin.write(f"{COMMAND_MARKER}\n")
             self.process.stdin.flush()
-            if not self.ready_event.wait(timeout=timeout or self.timeout):
+            if not self._ready_event.wait(timeout=timeout or self.timeout):
                 raise CDBError("Timed out waiting for CDB prompt")
         except IOError as e:
             raise CDBError(f"Failed to communicate with CDB: {e}")
@@ -252,10 +520,12 @@ class CDBSession(DebuggerSession):
         if not self.process:
             raise CDBError("CDB process is not running")
 
-        with self.command_lock:
-            self.ready_event.clear()
-            with self.lock:
-                self.output_lines = []
+        with self._command_lock:
+            self._ready_event.clear()
+            with self._lock:
+                self._buffer = []
+                self._marker_seen = False
+                self._marker_seen_time = 0.0
 
             try:
                 self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
@@ -267,12 +537,15 @@ class CDBSession(DebuggerSession):
                 self._wait_with_activity_timeout(command)
             else:
                 fixed_timeout = timeout if timeout is not None else self.timeout
-                if not self.ready_event.wait(timeout=fixed_timeout):
+                if not self._ready_event.wait(timeout=fixed_timeout):
                     raise CDBError(f"Command timed out after {fixed_timeout} seconds: {command}")
 
-            with self.lock:
-                result = self.output_lines.copy()
-                self.output_lines = []
+            # Give CDB a brief chance to finish emitting output after the marker.
+            self._drain_until_quiet()
+
+            with self._lock:
+                result = list(self._buffer)
+                self._buffer = []
             return result
 
     def _is_slow_command(self, command: str) -> bool:
@@ -283,22 +556,28 @@ class CDBSession(DebuggerSession):
         """Wait for a slow command using activity-based timeout.
 
         Keeps waiting as long as CDB produces output; only raises after
-        ``idle_limit`` consecutive seconds of silence.
+        ``idle_limit`` consecutive seconds of silence.  A hard wall-clock
+        cap prevents indefinite hangs from commands that trickle output.
         """
         idle_limit = max(self.timeout, 60)
-        with self.lock:
+        start_time = time.monotonic()
+        with self._lock:
             self._last_output_time = time.monotonic()
 
         while True:
-            if self.ready_event.wait(timeout=5):
+            if self._ready_event.wait(timeout=5):
                 return
             if self.process and self.process.poll() is not None:
                 raise CDBError(f"CDB process exited unexpectedly during: {command}")
-            with self.lock:
+            with self._lock:
                 idle_seconds = time.monotonic() - self._last_output_time
             if idle_seconds >= idle_limit:
                 raise CDBError(
                     f"Command appears stuck (no output for {int(idle_seconds)}s): {command}"
+                )
+            if time.monotonic() - start_time >= _MAX_WALL_CLOCK_S:
+                raise CDBError(
+                    f"Command exceeded max wall-clock time ({_MAX_WALL_CLOCK_S}s): {command}"
                 )
 
     def shutdown(self):

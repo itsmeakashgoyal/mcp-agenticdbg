@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 BLOCKED_COMMAND_PREFIXES_CDB = (
     ".shell", ".create", ".write", ".crash", ".reboot", ".kill", "!bpset",
+    ".load", ".unload",        # arbitrary DLL loading
+    ".logopen", ".logclose",   # file system writes
+    ".writemem",               # write memory to file
+    ".dump",                   # create dump file
 )
 BLOCKED_COMMAND_PREFIXES_GDB = (
     "shell", "!",
