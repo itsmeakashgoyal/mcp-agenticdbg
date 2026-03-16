@@ -61,6 +61,7 @@ def validate_debugger_command(command: str, debugger_type: str = "auto") -> None
     if debugger_type == "auto":
         debugger_type = detect_debugger_type()
 
+    blocklist: tuple[str, ...]
     if debugger_type == "cdb":
         blocklist = BLOCKED_COMMAND_PREFIXES_CDB
     elif debugger_type == "gdb":
@@ -346,7 +347,7 @@ def _find_file_in_repo(
 
     ``followlinks=False`` prevents symlinks from escaping the repo root.
     """
-    matches = []
+    matches: list[str] = []
     target = filename.lower()
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         _prune_dirs_for_lookup(dirnames)
@@ -660,13 +661,13 @@ def get_or_create_session(
             or (existing.image_path or "") != (image_path or "")
         )
 
-        if config_mismatch and replace_if_config_mismatch:
+        if config_mismatch and replace_if_config_mismatch and existing is not None:
             try:
                 existing.shutdown()
             except Exception:
                 pass
             finally:
-                active_sessions[session_id] = None
+                del active_sessions[session_id]
 
         if session_id not in active_sessions or active_sessions[session_id] is None:
             while active_session_count() >= _max_concurrent_sessions:
@@ -805,10 +806,10 @@ def _dump_path_hint(debugger_type: str = "auto") -> str:
             hint = f"\n\nFound {len(dumps)} dump(s) in {local_path}:\n"
             for i, d in enumerate(dumps[:10]):
                 try:
-                    size = round(os.path.getsize(d) / (1024 * 1024), 2)
+                    size_str = str(round(os.path.getsize(d) / (1024 * 1024), 2))
                 except OSError:
-                    size = "?"
-                hint += f"  {i + 1}. {d} ({size} MB)\n"
+                    size_str = "?"
+                hint += f"  {i + 1}. {d} ({size_str} MB)\n"
     return hint
 
 
@@ -971,9 +972,9 @@ async def handle_list_dumps(
     result = f"Found {len(dumps)} dump(s) in {search_dir}:\n\n"
     for i, d in enumerate(dumps):
         try:
-            size = round(os.path.getsize(d) / (1024 * 1024), 2)
+            size_str = str(round(os.path.getsize(d) / (1024 * 1024), 2))
         except OSError:
-            size = "?"
-        result += f"{i + 1}. {d} ({size} MB)\n"
+            size_str = "?"
+        result += f"{i + 1}. {d} ({size_str} MB)\n"
 
     return [TextContent(type="text", text=result)]

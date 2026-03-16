@@ -16,4 +16,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: tim-actions/dco@master
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Check DCO sign-off
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          FAILED=0
+          for SHA in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            if ! git log -1 --format='%B' "$SHA" | grep -qE '^Signed-off-by: .+ <.+>'; then
+              echo "::error::Commit $SHA is missing 'Signed-off-by' trailer"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "All commits must include a DCO sign-off."
+            echo "Use: git commit -s -m \"your message\""
+            echo "To fix existing commits: git rebase --signoff HEAD~N && git push --force-with-lease"
+            exit 1
+          fi
+          echo "All commits have DCO sign-off."

@@ -32,8 +32,10 @@ def _run_process(cmd: list[str], cwd: str, check: bool = True) -> subprocess.Com
             timeout=_GIT_CMD_TIMEOUT_SEC,
         )
     except subprocess.TimeoutExpired as exc:
-        stderr_text = (exc.stderr or "").strip()
-        stdout_text = (exc.stdout or "").strip()
+        _raw_err = exc.stderr or ""
+        _raw_out = exc.stdout or ""
+        stderr_text = (_raw_err.decode() if isinstance(_raw_err, bytes) else _raw_err).strip()
+        stdout_text = (_raw_out.decode() if isinstance(_raw_out, bytes) else _raw_out).strip()
         timeout_msg = f"Command timed out after {_GIT_CMD_TIMEOUT_SEC}s: {' '.join(cmd)}"
         if stderr_text:
             timeout_msg = f"{timeout_msg}\n{stderr_text}"

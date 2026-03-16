@@ -75,6 +75,7 @@ class LLDBSession(DebuggerSession):
         if additional_args:
             cmd_args.extend(additional_args)
 
+        self.process: subprocess.Popen[str] | None = None
         try:
             self.process = subprocess.Popen(
                 cmd_args,
@@ -485,4 +486,5 @@ class LLDBSession(DebuggerSession):
             self.process = None
 
     def get_session_id(self) -> str:
+        assert self.dump_path is not None
         return os.path.abspath(self.dump_path)

@@ -282,17 +282,6 @@ async def serve(
 
     server = Server("triagepilot")
 
-    debugger_ctx = dict(
-        cdb_path=cdb_path,
-        debugger_path=debugger_path,
-        debugger_type=debugger_type,
-        symbols_path=symbols_path,
-        image_path=image_path,
-        repo_path=repo_path,
-        timeout=timeout,
-        verbose=verbose,
-    )
-
     # -------------------------------------------------------------------------
     # Tools
     # -------------------------------------------------------------------------
@@ -355,17 +344,44 @@ async def serve(
         try:
             if name in ("analyze_dump", "analyze_windbg_dump"):
                 return await handle_analyze_dump(
-                    arguments, **debugger_ctx, AnalyzeDumpParams=AnalyzeDumpParams
+                    arguments,
+                    cdb_path=cdb_path,
+                    debugger_path=debugger_path,
+                    debugger_type=debugger_type,
+                    symbols_path=symbols_path,
+                    image_path=image_path,
+                    repo_path=repo_path,
+                    timeout=timeout,
+                    verbose=verbose,
+                    AnalyzeDumpParams=AnalyzeDumpParams,
                 )
 
             elif name in ("open_dump", "open_windbg_dump"):
                 return await handle_open_dump(
-                    arguments, **debugger_ctx, OpenDumpParams=OpenDumpParams
+                    arguments,
+                    cdb_path=cdb_path,
+                    debugger_path=debugger_path,
+                    debugger_type=debugger_type,
+                    symbols_path=symbols_path,
+                    image_path=image_path,
+                    repo_path=repo_path,
+                    timeout=timeout,
+                    verbose=verbose,
+                    OpenDumpParams=OpenDumpParams,
                 )
 
             elif name in ("run_debugger_cmd", "run_windbg_cmd"):
                 return await handle_run_cmd(
-                    arguments, **debugger_ctx, RunCommandParams=RunCommandParams
+                    arguments,
+                    cdb_path=cdb_path,
+                    debugger_path=debugger_path,
+                    debugger_type=debugger_type,
+                    symbols_path=symbols_path,
+                    image_path=image_path,
+                    repo_path=repo_path,
+                    timeout=timeout,
+                    verbose=verbose,
+                    RunCommandParams=RunCommandParams,
                 )
 
             elif name in ("close_dump", "close_windbg_dump"):
@@ -392,7 +408,7 @@ async def serve(
 
                 graph = build_crash_analysis_graph(include_llm_nodes=include_llm)
 
-                initial_state = {
+                initial_state: dict[str, object] = {
                     "dump_path": args.dump_path,
                     "symbols_path": args.symbols_path or symbols_path,
                     "image_path": args.image_path or image_path,

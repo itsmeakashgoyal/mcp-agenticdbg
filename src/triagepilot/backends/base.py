@@ -27,6 +27,22 @@ class DebuggerSession(ABC):
     timeout: int
     verbose: bool
 
+    def __init__(
+        self,
+        dump_path: str,
+        debugger_path: str | None = None,
+        symbols_path: str | None = None,
+        image_path: str | None = None,
+        timeout: int = 30,
+        verbose: bool = False,
+        **kwargs: object,
+    ) -> None:
+        self.dump_path = dump_path
+        self.symbols_path = symbols_path
+        self.image_path = image_path
+        self.timeout = timeout
+        self.verbose = verbose
+
     @abstractmethod
     def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         """Send a command to the debugger and return the output lines."""

@@ -1243,4 +1243,5 @@ class GDBSession(DebuggerSession):
         self.process = None
 
     def get_session_id(self) -> str:
+        assert self.dump_path is not None
         return os.path.abspath(self.dump_path)
