@@ -44,6 +44,7 @@ echo "Using compiler: $CXX"
 echo "Output directory: $OUTDIR"
 echo ""
 
+# Standard single-file sources
 SOURCES=(
     stack-overflow.cpp
     use-after-free.cpp
@@ -51,12 +52,26 @@ SOURCES=(
     vtable-corruption.cpp
     stack-buffer-overrun.cpp
     heap-corruption.cpp
+    deep-callchain-nullptr.cpp
+    heap-metadata-corruption.cpp
+    multi-inheritance-crash.cpp
 )
 
 for src in "${SOURCES[@]}"; do
     base="${src%.cpp}"
     echo "  Compiling $src -> $OUTDIR/$base"
     "$CXX" "${BASE_FLAGS[@]}" "${EXTRA_CXXFLAGS[@]}" -o "$OUTDIR/$base" "$src"
+done
+
+# Sources requiring extra link flags
+THREADED_SOURCES=(
+    thread-uaf.cpp
+)
+
+for src in "${THREADED_SOURCES[@]}"; do
+    base="${src%.cpp}"
+    echo "  Compiling $src -> $OUTDIR/$base  (+ -lpthread)"
+    "$CXX" "${BASE_FLAGS[@]}" "${EXTRA_CXXFLAGS[@]}" -o "$OUTDIR/$base" "$src" -lpthread
 done
 
 echo ""
@@ -69,3 +84,9 @@ echo "Then run an example:"
 echo "  ./$OUTDIR/stack-overflow"
 echo ""
 echo "Core dumps will be written to the current directory or /var/crash/ depending on your system."
+echo ""
+echo "Complex examples (for GDB triage):"
+echo "  thread-uaf            — multi-threaded use-after-free (two threads)"
+echo "  deep-callchain-nullptr— null dereference 12+ frames deep in a recursive evaluator"
+echo "  heap-metadata-corruption — off-by-one corrupts heap metadata; crash in free()"
+echo "  multi-inheritance-crash  — wrong C-style cast across multiple inheritance → vtable crash"
