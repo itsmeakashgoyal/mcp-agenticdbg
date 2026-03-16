@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
-from typing import Optional
 
 from .base import DebuggerError, DebuggerSession
 
@@ -41,22 +40,27 @@ def _get_backend_class(debugger_type: str) -> type[DebuggerSession]:
     """Import and return the session class for the given debugger type."""
     if debugger_type == "cdb":
         from .cdb import CDBSession
+
         return CDBSession
     elif debugger_type == "lldb":
         from .lldb import LLDBSession
+
         return LLDBSession
     elif debugger_type == "gdb":
         from .gdb import GDBSession
+
         return GDBSession
     else:
-        raise ValueError(f"Unknown debugger type: {debugger_type!r}. Use 'auto', 'cdb', 'lldb', or 'gdb'.")
+        raise ValueError(
+            f"Unknown debugger type: {debugger_type!r}. Use 'auto', 'cdb', 'lldb', or 'gdb'."
+        )
 
 
 def create_session(
     dump_path: str,
-    debugger_path: Optional[str] = None,
-    symbols_path: Optional[str] = None,
-    image_path: Optional[str] = None,
+    debugger_path: str | None = None,
+    symbols_path: str | None = None,
+    image_path: str | None = None,
     timeout: int = 10,
     verbose: bool = False,
     debugger_type: str = "auto",
@@ -82,7 +86,7 @@ def create_session(
     )
 
 
-def get_local_dumps_path(debugger_type: str = "auto") -> Optional[str]:
+def get_local_dumps_path(debugger_type: str = "auto") -> str | None:
     """Return the default crash dump directory for the given backend."""
     if debugger_type == "auto":
         debugger_type = detect_debugger_type()

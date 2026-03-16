@@ -14,17 +14,37 @@ def main():
     parser = argparse.ArgumentParser(
         description="TriagePilot - AI-powered crash dump triage MCP server (Windows/Linux/macOS)"
     )
-    parser.add_argument("--debugger-type", type=str, default=None,
-                        choices=["auto", "cdb", "lldb", "gdb"],
-                        help="Debugger backend to use (default: auto-detect by platform)")
+    parser.add_argument(
+        "--debugger-type",
+        type=str,
+        default=None,
+        choices=["auto", "cdb", "lldb", "gdb"],
+        help="Debugger backend to use (default: auto-detect by platform)",
+    )
     parser.add_argument("--debugger-path", type=str, help="Custom path to the debugger executable")
-    parser.add_argument("--cdb-path", type=str, help="Custom path to cdb.exe (Windows, deprecated -- use --debugger-path)")
-    parser.add_argument("--symbols-path", type=str, help="Path to symbol/debug info files, prepended to symbol search path")
-    parser.add_argument("--image-path", type=str, help="Path to executable/binary images for analysis")
-    parser.add_argument("--repo-path", type=str, help="Local repository path to locate faulting source files (bypasses .gitignore)")
+    parser.add_argument(
+        "--cdb-path",
+        type=str,
+        help="Custom path to cdb.exe (Windows, deprecated -- use --debugger-path)",
+    )
+    parser.add_argument(
+        "--symbols-path",
+        type=str,
+        help="Path to symbol/debug info files, prepended to symbol search path",
+    )
+    parser.add_argument(
+        "--image-path", type=str, help="Path to executable/binary images for analysis"
+    )
+    parser.add_argument(
+        "--repo-path",
+        type=str,
+        help="Local repository path to locate faulting source files (bypasses .gitignore)",
+    )
     parser.add_argument("--timeout", type=int, default=None, help="Command timeout in seconds")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--log-level", type=str, default=None, help="Log level (DEBUG, INFO, WARNING, ERROR)")
+    parser.add_argument(
+        "--log-level", type=str, default=None, help="Log level (DEBUG, INFO, WARNING, ERROR)"
+    )
 
     args = parser.parse_args()
 

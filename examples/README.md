@@ -1,152 +1,63 @@
 # Crash Examples
 
-Six intentional crash programs that generate crash dumps and debug symbols for testing the TriagePilot MCP server.
+Ten intentional crash programs for testing the TriagePilot MCP server. Each generates a crash dump with full debug symbols so you can practice triage from build to fix.
 
-Supported platforms: **Windows** (MSVC or Clang), **Linux** (GCC or Clang), **macOS** (Clang).
+## Pick Your Platform
+
+| Platform | Folder | Guide | Debugger |
+|----------|--------|-------|----------|
+| **Windows** | [`windows/`](windows/) | [windows/README.md](windows/README.md) | CDB / WinDbg |
+| **Linux** | [`linux/`](linux/) | [linux/README.md](linux/README.md) | GDB |
+| **macOS** | [`macos/`](macos/) | [macos/README.md](macos/README.md) | LLDB |
+
+Go to your platform's folder and follow the README. Each guide walks you through: **prerequisites -> build -> crash -> analyze** in one page.
 
 ## Examples
 
-| File | Crash Type | Windows Exception / POSIX Signal |
-|---|---|---|
-| `stack-overflow.cpp` | Unbounded recursion exhausts the thread stack | `0xC00000FD` / `SIGSEGV` |
-| `use-after-free.cpp` | Dereference a pointer into freed & recycled heap memory | `0xC0000005` / `SIGSEGV` |
-| `double-free.cpp` | Free the same block twice, corrupting heap free-lists | Heap corruption / `SIGABRT` |
-| `vtable-corruption.cpp` | Call a virtual method on a deleted + overwritten object | `0xC0000005` / `SIGSEGV` |
-| `stack-buffer-overrun.cpp` | Overflow a stack buffer to overwrite an adjacent function pointer | `0xC0000005` / `SIGSEGV` |
-| `heap-corruption.cpp` | Write past an allocation boundary, corrupting heap chunk metadata | Heap corruption / `SIGABRT` |
+All crash programs live in [`common/`](common/) and are shared across platforms.
 
-Each example includes `crashdump.h`, which provides cross-platform crash dump support:
-- **Windows:** Installs an unhandled-exception filter that writes a full MiniDump (`.dmp`).
-- **Linux / macOS:** Installs signal handlers and enables core dumps via `setrlimit`.
+| Example | Crash Type | Difficulty |
+|---------|-----------|------------|
+| `stack-overflow` | Unbounded recursion exhausts thread stack | Simple |
+| `use-after-free` | Dereference freed + recycled heap memory | Simple |
+| `double-free` | Free same block twice, corrupt free-lists | Simple |
+| `vtable-corruption` | Virtual call on deleted object | Simple |
+| `stack-buffer-overrun` | Stack buffer overflow overwrites function pointer | Simple |
+| `heap-corruption` | Write past allocation boundary | Simple |
+| `deep-callchain-nullptr` | Null deref 12+ frames deep in recursive evaluator | Complex |
+| `heap-metadata-corruption` | Off-by-one corrupts heap metadata; crash in `free()` | Complex |
+| `multi-inheritance-crash` | Wrong C-style cast + multiple inheritance vtable crash | Complex |
+| `thread-uaf` | Multi-threaded use-after-free race condition | Complex |
 
-## Prerequisites
+## How It Works
 
-### Windows
-- **Visual Studio Build Tools** (2019 or later) — specifically `cl.exe` and `link.exe`
-- **Windows SDK** — provides `dbghelp.lib` (used by `crashdump.h`)
-- *Alternatively*, use **Clang for Windows** with `clang-cl` or `clang++`
+Every example calls `EnableCrashDumps()` from `common/crashdump.h` at startup:
 
-### Linux
-- **GCC** (`g++`) or **Clang** (`clang++`)
-- Core dumps enabled: `ulimit -c unlimited`
+- **Windows** -- installs an unhandled-exception filter that writes a `.dmp` MiniDump (via `dbghelp.lib`) to a `dumps/` folder next to the executable.
+- **Linux / macOS** -- installs signal handlers for `SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGFPE` and enables unlimited core dumps via `setrlimit`. On macOS, use `gen_core_mac.sh` to capture cores reliably (see [macos/README.md](macos/README.md)).
 
-### macOS
-- **Xcode Command Line Tools** or **Clang** (pre-installed on macOS)
-- Core dumps enabled: `ulimit -c unlimited`
-- One-time setup may be required:
-  - `launchctl limit core unlimited unlimited`
-  - `sudo mkdir -p /cores && sudo chmod 1777 /cores`
+Debug symbols are embedded in the executables (DWARF on Linux/macOS) or in `.pdb` files next to the `.exe` (Windows), so the debugger automatically resolves function names, source lines, and local variables.
 
-## Build
+## Directory Layout
 
-### Windows (MSVC)
-
-Open a **Developer Command Prompt for Visual Studio** (or Developer PowerShell) and run:
-
-```powershell
-cd examples
-.\build.ps1
 ```
-
-### Windows (Clang)
-
-```powershell
-clang++ -g -O0 -o build\out\stack-overflow.exe stack-overflow.cpp
+examples/
+  README.md                     <- you are here
+  common/                       <- shared source code (all platforms)
+    crashdump.h                     cross-platform dump header
+    *.cpp                           crash example source files
+  windows/                      <- Windows-specific
+    README.md                       complete Windows walkthrough
+    build.ps1                       MSVC build script
+    run-all.ps1                     run all examples and collect dumps
+    cdb_triage_demo.py              standalone CDB triage demo
+  linux/                        <- Linux-specific
+    README.md                       complete Linux walkthrough
+    build.sh                        GCC/Clang build script
+    gdb_triage_demo.py              standalone GDB triage demo
+  macos/                        <- macOS-specific
+    README.md                       complete macOS walkthrough
+    build.sh                        Clang build script
+    gen_core_mac.sh                 generate core dump via lldb
+    lldb_triage_demo.py             standalone LLDB triage demo
 ```
-
-### Linux / macOS
-
-```bash
-cd examples
-chmod +x build.sh
-./build.sh
-```
-
-Notes:
-- On macOS, `build.sh` prefers `clang++` by default.
-- Override compiler with `CXX=clang++ ./build.sh` (or `CXX=g++ ./build.sh`).
-
-Output for all platforms: executables with debug symbols in `build/out/`.
-
-### Build flags
-
-| Platform | Flag | Purpose |
-|---|---|---|
-| MSVC | `/Zi` | Emit debug information (generates PDB) |
-| MSVC | `/Od` | Disable optimisation |
-| MSVC | `/MT` | Static CRT link |
-| MSVC | `/GS-` | Disable stack cookies for raw corruption |
-| GCC/Clang | `-g` | Include DWARF debug information |
-| GCC/Clang | `-O0` | Disable optimisation |
-
-## Run
-
-### Windows
-
-Execute all examples and collect dumps:
-
-```powershell
-.\run-all.ps1
-```
-
-Or run a single example:
-
-```powershell
-.\run-all.ps1 -Name stack-overflow
-```
-
-Dumps are written to `build\out\dumps\`.
-
-### Linux / macOS
-
-First, enable core dumps:
-
-```bash
-ulimit -c unlimited
-```
-
-On macOS, if no core file appears, also run:
-
-```bash
-launchctl limit core unlimited unlimited
-sudo mkdir -p /cores
-sudo chmod 1777 /cores
-```
-
-Then run an example:
-
-```bash
-./build/out/stack-overflow
-```
-
-Core dumps will be written to the current directory, `/var/crash/`, or as configured by `/proc/sys/kernel/core_pattern` (Linux). On macOS, default path is usually `/cores/core.<pid>`.
-
-## Analyze with TriagePilot
-
-Once you have a dump file, use the MCP tools:
-
-### Windows (.dmp)
-```
-analyze_dump   build\out\dumps\stack-overflow.exe.12345.dmp
-run_debugger_cmd   .ecxr; kv
-run_debugger_cmd   !analyze -v
-close_dump     build\out\dumps\stack-overflow.exe.12345.dmp
-```
-
-### Linux (core dump)
-```
-analyze_dump   core.12345
-run_debugger_cmd   bt full
-run_debugger_cmd   info threads
-close_dump     core.12345
-```
-
-### macOS (core dump)
-```
-analyze_dump   /cores/core.12345
-run_debugger_cmd   bt all
-run_debugger_cmd   thread list
-close_dump     /cores/core.12345
-```
-
-Debug symbols are embedded in the executables (DWARF on Linux/macOS) or in `.pdb` files alongside the `.exe` (Windows), so the debugger will automatically resolve function names, source lines, and local variables.

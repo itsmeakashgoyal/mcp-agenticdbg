@@ -1,30 +1,26 @@
 """Tests for faulting source helpers (parse, find, match, read, locate)."""
 
 import os
-import pytest
 
 from triagepilot.tools.debugger_tools import (
-    _parse_faulting_source,
-    _parse_faulting_module_function,
+    _best_match,
     _extract_stack_functions,
     _find_file_in_repo,
     _find_function_in_repo,
-    _best_match,
+    _parse_faulting_module_function,
+    _parse_faulting_source,
     _read_source_context,
     locate_faulting_source,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_faulting_source
 # ---------------------------------------------------------------------------
 
+
 class TestParseFaultingSource:
     def test_both_present(self):
-        text = (
-            "FAULTING_SOURCE_FILE: C:\\src\\main.cpp\n"
-            "FAULTING_SOURCE_LINE_NUMBER: 42\n"
-        )
+        text = "FAULTING_SOURCE_FILE: C:\\src\\main.cpp\nFAULTING_SOURCE_LINE_NUMBER: 42\n"
         file, line = _parse_faulting_source(text)
         assert file == "C:\\src\\main.cpp"
         assert line == 42
@@ -44,6 +40,7 @@ class TestParseFaultingSource:
 # ---------------------------------------------------------------------------
 # _find_file_in_repo
 # ---------------------------------------------------------------------------
+
 
 class TestFindFileInRepo:
     def test_finds_file(self, tmp_path):
@@ -69,6 +66,7 @@ class TestFindFileInRepo:
 # _best_match
 # ---------------------------------------------------------------------------
 
+
 class TestBestMatch:
     def test_single_candidate(self):
         assert _best_match("x/y/z.cpp", ["/repo/z.cpp"]) == "/repo/z.cpp"
@@ -85,6 +83,7 @@ class TestBestMatch:
 # ---------------------------------------------------------------------------
 # _read_source_context
 # ---------------------------------------------------------------------------
+
 
 class TestReadSourceContext:
     def test_snippet_around_line(self, tmp_path):
@@ -103,21 +102,16 @@ class TestReadSourceContext:
 # _parse_faulting_module_function
 # ---------------------------------------------------------------------------
 
+
 class TestParseFaultingModuleFunction:
     def test_symbol_and_module(self):
-        text = (
-            "MODULE_NAME: MyAppCore\n"
-            "SYMBOL_NAME:  MyAppCore!ProcessTreeNode+0x9e5\n"
-        )
+        text = "MODULE_NAME: MyAppCore\nSYMBOL_NAME:  MyAppCore!ProcessTreeNode+0x9e5\n"
         module, func = _parse_faulting_module_function(text)
         assert module == "MyAppCore"
         assert func == "ProcessTreeNode"
 
     def test_namespaced_symbol(self):
-        text = (
-            "MODULE_NAME: MyApp\n"
-            "SYMBOL_NAME:  MyApp!app::Core::HandleEvent+0x42\n"
-        )
+        text = "MODULE_NAME: MyApp\nSYMBOL_NAME:  MyApp!app::Core::HandleEvent+0x42\n"
         module, func = _parse_faulting_module_function(text)
         assert module == "MyApp"
         assert func == "HandleEvent"
@@ -137,6 +131,7 @@ class TestParseFaultingModuleFunction:
 # ---------------------------------------------------------------------------
 # _extract_stack_functions
 # ---------------------------------------------------------------------------
+
 
 class TestExtractStackFunctions:
     def test_extracts_unique_functions(self):
@@ -160,14 +155,11 @@ class TestExtractStackFunctions:
 # _find_function_in_repo
 # ---------------------------------------------------------------------------
 
+
 class TestFindFunctionInRepo:
     def test_finds_definition(self, tmp_path):
         src = tmp_path / "Widget.cpp"
-        src.write_text(
-            "int Widget::doStuff(int x) {\n"
-            "    return x + 1;\n"
-            "}\n"
-        )
+        src.write_text("int Widget::doStuff(int x) {\n    return x + 1;\n}\n")
         matches = _find_function_in_repo("doStuff", str(tmp_path))
         assert len(matches) == 1
         assert matches[0][0] == str(src)
@@ -176,11 +168,7 @@ class TestFindFunctionInRepo:
     def test_finds_standalone_function(self, tmp_path):
         src = tmp_path / "utils.cpp"
         src.write_text(
-            "#include <stdio.h>\n"
-            "\n"
-            "void ProcessTreeNode(TreeObj obj) {\n"
-            "    // body\n"
-            "}\n"
+            "#include <stdio.h>\n\nvoid ProcessTreeNode(TreeObj obj) {\n    // body\n}\n"
         )
         matches = _find_function_in_repo("ProcessTreeNode", str(tmp_path))
         assert len(matches) == 1
@@ -221,6 +209,7 @@ class TestFindFunctionInRepo:
 # locate_faulting_source
 # ---------------------------------------------------------------------------
 
+
 class TestLocateFaultingSource:
     def test_no_repo_path(self):
         assert locate_faulting_source("anything", None) is None
@@ -238,7 +227,7 @@ class TestLocateFaultingSource:
     def test_file_found(self, tmp_path):
         src = tmp_path / "Found.cpp"
         src.write_text("\n".join(f"line {i}" for i in range(1, 30)))
-        text = f"FAULTING_SOURCE_FILE: C:\\build\\Found.cpp\nFAULTING_SOURCE_LINE_NUMBER: 10\n"
+        text = "FAULTING_SOURCE_FILE: C:\\build\\Found.cpp\nFAULTING_SOURCE_LINE_NUMBER: 10\n"
         result = locate_faulting_source(text, str(tmp_path))
         assert "### Faulting Source Code" in result
         assert "Found.cpp" in result
@@ -246,15 +235,9 @@ class TestLocateFaultingSource:
     def test_fallback_to_function_search(self, tmp_path):
         src = tmp_path / "CoreEngine.cpp"
         src.write_text(
-            "// core engine\n"
-            "bool ProcessTreeNode(TreeObj tree) {\n"
-            "    return true;\n"
-            "}\n"
+            "// core engine\nbool ProcessTreeNode(TreeObj tree) {\n    return true;\n}\n"
         )
-        text = (
-            "MODULE_NAME: MyAppCore\n"
-            "SYMBOL_NAME:  MyAppCore!ProcessTreeNode+0x9e5\n"
-        )
+        text = "MODULE_NAME: MyAppCore\nSYMBOL_NAME:  MyAppCore!ProcessTreeNode+0x9e5\n"
         result = locate_faulting_source(text, str(tmp_path))
         assert result is not None
         assert "Located by Symbol Name Search" in result
@@ -276,10 +259,7 @@ class TestLocateFaultingSource:
         assert "GetDocObject" in result
 
     def test_nothing_found_returns_diagnostic(self, tmp_path):
-        text = (
-            "MODULE_NAME: MyAppCore\n"
-            "SYMBOL_NAME:  MyAppCore!SomeObscureFunc+0x9e5\n"
-        )
+        text = "MODULE_NAME: MyAppCore\nSYMBOL_NAME:  MyAppCore!SomeObscureFunc+0x9e5\n"
         result = locate_faulting_source(text, str(tmp_path))
         assert result is not None
         assert "Could not locate source" in result

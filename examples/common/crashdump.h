@@ -97,7 +97,11 @@ static void EnableCrashDumps(void)
 #include <stdlib.h>
 #include <sys/resource.h>
 
-static unsigned char _crashdump_altstack_mem[SIGSTKSZ * 4];
+/* 65536 bytes (64 KiB): glibc 2.34+ makes SIGSTKSZ a sysconf() result, so
+ * it is no longer usable as a compile-time array size. 64 KiB is well above
+ * the POSIX-mandated minimum and sufficient on all supported platforms. */
+#define _CRASHDUMP_ALTSTACK_SIZE 65536
+static unsigned char _crashdump_altstack_mem[_CRASHDUMP_ALTSTACK_SIZE];
 
 static void _crashdump_signal_handler(int sig)
 {

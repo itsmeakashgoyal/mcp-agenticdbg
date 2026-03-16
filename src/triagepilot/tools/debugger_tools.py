@@ -8,19 +8,19 @@ import logging
 import os
 import re
 import sys
-import time
 import threading
+import time
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
 
 from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, TextContent, INVALID_PARAMS, INTERNAL_ERROR
+from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, ErrorData, TextContent
 
 from ..backends import (
-    DebuggerError,
     DebuggerSession,
     create_session,
     detect_debugger_type,
+)
+from ..backends import (
     get_local_dumps_path as _backend_get_local_dumps_path,
 )
 
@@ -31,13 +31,27 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BLOCKED_COMMAND_PREFIXES_CDB = (
-    ".shell", ".create", ".write", ".crash", ".reboot", ".kill", "!bpset",
+    ".shell",
+    ".create",
+    ".write",
+    ".crash",
+    ".reboot",
+    ".kill",
+    "!bpset",
+    ".load",
+    ".unload",  # arbitrary DLL loading
+    ".logopen",
+    ".logclose",  # file system writes
+    ".writemem",  # write memory to file
+    ".dump",  # create dump file
 )
 BLOCKED_COMMAND_PREFIXES_GDB = (
-    "shell", "!",
+    "shell",
+    "!",
 )
 BLOCKED_COMMAND_PREFIXES_LLDB = (
-    "platform shell", "process launch",
+    "platform shell",
+    "process launch",
 )
 
 
@@ -47,6 +61,7 @@ def validate_debugger_command(command: str, debugger_type: str = "auto") -> None
     if debugger_type == "auto":
         debugger_type = detect_debugger_type()
 
+    blocklist: tuple[str, ...]
     if debugger_type == "cdb":
         blocklist = BLOCKED_COMMAND_PREFIXES_CDB
     elif debugger_type == "gdb":
@@ -100,6 +115,8 @@ _cmd_rate_limiter = _TokenBucket(rate=10.0, capacity=20.0)
 
 active_sessions: OrderedDict[str, DebuggerSession] = OrderedDict()
 _max_concurrent_sessions: int = 5
+# Protects active_sessions against concurrent create/evict races
+_session_lock = threading.Lock()
 
 
 def set_max_concurrent_sessions(limit: int) -> None:
@@ -116,7 +133,7 @@ def active_session_count() -> int:
 # ---------------------------------------------------------------------------
 
 
-def get_local_dumps_path(debugger_type: str = "auto") -> Optional[str]:
+def get_local_dumps_path(debugger_type: str = "auto") -> str | None:
     """Get the default crash dumps path for the current platform."""
     return _backend_get_local_dumps_path(debugger_type)
 
@@ -140,33 +157,62 @@ def _dump_file_patterns(debugger_type: str = "auto") -> list[str]:
 _FAULTING_FILE_RE = re.compile(r"^FAULTING_SOURCE_FILE:\s+(.+)$", re.MULTILINE)
 _FAULTING_LINE_RE = re.compile(r"^FAULTING_SOURCE_LINE_NUMBER:\s+(\d+)$", re.MULTILINE)
 _SOURCE_CONTEXT_LINES = 25
-_SOURCE_LOOKUP_MAX_SECONDS = max(5, int(os.environ.get("TRIAGEPILOT_SOURCE_LOOKUP_MAX_SECONDS", "45")))
-_SOURCE_LOOKUP_MAX_FILES = max(1000, int(os.environ.get("TRIAGEPILOT_SOURCE_LOOKUP_MAX_FILES", "200000")))
+_SOURCE_LOOKUP_MAX_SECONDS = max(
+    5, int(os.environ.get("TRIAGEPILOT_SOURCE_LOOKUP_MAX_SECONDS", "45"))
+)
+_SOURCE_LOOKUP_MAX_FILES = max(
+    1000, int(os.environ.get("TRIAGEPILOT_SOURCE_LOOKUP_MAX_FILES", "200000"))
+)
 _SOURCE_LOOKUP_SKIP_DIR_NAMES = frozenset(
     {
-        ".git", ".hg", ".svn", ".vs", ".idea", ".cache",
-        "__pycache__", ".mypy_cache", ".pytest_cache",
+        ".git",
+        ".hg",
+        ".svn",
+        ".vs",
+        ".idea",
+        ".cache",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
         "node_modules",
     }
 )
 
-_SOURCE_EXTENSIONS = frozenset((
-    ".cpp", ".c", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".inl",
-    ".m", ".mm",       # Objective-C / Objective-C++
-    ".swift",          # Swift
-    ".rs",             # Rust
-    ".go",             # Go
-))
+_SOURCE_EXTENSIONS = frozenset(
+    (
+        ".cpp",
+        ".c",
+        ".cc",
+        ".cxx",
+        ".h",
+        ".hpp",
+        ".hxx",
+        ".inl",
+        ".m",
+        ".mm",  # Objective-C / Objective-C++
+        ".swift",  # Swift
+        ".rs",  # Rust
+        ".go",  # Go
+    )
+)
 
 _SYMBOL_NAME_RE = re.compile(r"^SYMBOL_NAME:\s+(\w+)!([A-Za-z0-9_:~]+)", re.MULTILINE)
 _MODULE_NAME_RE = re.compile(r"^MODULE_NAME:\s+(\w+)", re.MULTILINE)
 _STACK_FRAME_RE = re.compile(r"(\w+)!([A-Za-z0-9_:~]+)\+0x[0-9a-fA-F]+")
 
-# GDB/LLDB-style stack frame: #0 0x... in function_name (...) at file.cpp:line
-_POSIX_FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-fA-F]+\s+in\s+)?(\S+)\s+\(.*?\)\s+(?:at|from)\s+(\S+?)(?::(\d+))?$", re.MULTILINE)
+# GDB/LLDB "at file.cpp:42" patterns in backtraces
+_GDB_AT_RE = re.compile(
+    r"\bat\s+([\w./\-\\]+\.(?:c|cpp|cc|cxx|h|hpp|hxx|inl|rs|go|py|m|mm|swift)):(\d+)",
+    re.MULTILINE,
+)
+# GDB "#N ... in func_name (" frame pattern
+_GDB_FRAME_FUNC_RE = re.compile(
+    r"^#\d+\s+(?:0x[0-9a-fA-F]+\s+in\s+)?([A-Za-z_][A-Za-z0-9_:<>~*]+)\s*\(",
+    re.MULTILINE,
+)
 
 
-def _parse_faulting_source(analysis_text: str) -> Tuple[Optional[str], Optional[int]]:
+def _parse_faulting_source(analysis_text: str) -> tuple[str | None, int | None]:
     """Extract FAULTING_SOURCE_FILE and FAULTING_SOURCE_LINE_NUMBER from analysis output."""
     file_match = _FAULTING_FILE_RE.search(analysis_text)
     line_match = _FAULTING_LINE_RE.search(analysis_text)
@@ -175,7 +221,7 @@ def _parse_faulting_source(analysis_text: str) -> Tuple[Optional[str], Optional[
     return faulting_file, faulting_line
 
 
-def _new_source_lookup_budget() -> Dict[str, float | int | bool]:
+def _new_source_lookup_budget() -> dict[str, float | int | bool]:
     return {
         "deadline": time.monotonic() + _SOURCE_LOOKUP_MAX_SECONDS,
         "max_files": _SOURCE_LOOKUP_MAX_FILES,
@@ -184,7 +230,7 @@ def _new_source_lookup_budget() -> Dict[str, float | int | bool]:
     }
 
 
-def _is_budget_exhausted(budget: Optional[Dict[str, float | int | bool]]) -> bool:
+def _is_budget_exhausted(budget: dict[str, float | int | bool] | None) -> bool:
     if not budget:
         return False
     if bool(budget.get("stopped")):
@@ -198,7 +244,7 @@ def _is_budget_exhausted(budget: Optional[Dict[str, float | int | bool]]) -> boo
     return False
 
 
-def _consume_budget_file(budget: Optional[Dict[str, float | int | bool]]) -> bool:
+def _consume_budget_file(budget: dict[str, float | int | bool] | None) -> bool:
     if _is_budget_exhausted(budget):
         return False
     if budget:
@@ -206,11 +252,11 @@ def _consume_budget_file(budget: Optional[Dict[str, float | int | bool]]) -> boo
     return True
 
 
-def _prune_dirs_for_lookup(dirnames: List[str]) -> None:
+def _prune_dirs_for_lookup(dirnames: list[str]) -> None:
     dirnames[:] = [d for d in dirnames if d.lower() not in _SOURCE_LOOKUP_SKIP_DIR_NAMES]
 
 
-def _parse_faulting_module_function(analysis_text: str) -> Tuple[Optional[str], Optional[str]]:
+def _parse_faulting_module_function(analysis_text: str) -> tuple[str | None, str | None]:
     """Extract MODULE_NAME and the bare function name from SYMBOL_NAME.
 
     For ``SYMBOL_NAME: MyAppCore!ProcessTreeNode+0x9e5`` this returns
@@ -228,10 +274,10 @@ def _parse_faulting_module_function(analysis_text: str) -> Tuple[Optional[str], 
     return module_name, function_name
 
 
-def _extract_stack_functions(analysis_text: str) -> List[Tuple[str, str]]:
+def _extract_stack_functions(analysis_text: str) -> list[tuple[str, str]]:
     """Extract (module, bare_function_name) pairs from stack trace frames."""
     seen = set()
-    results: List[Tuple[str, str]] = []
+    results: list[tuple[str, str]] = []
     # CDB-style frames: module!Function+0xOffset
     for module, symbol in _STACK_FRAME_RE.findall(analysis_text):
         bare = symbol.rsplit("::", 1)[-1] if "::" in symbol else symbol
@@ -242,22 +288,77 @@ def _extract_stack_functions(analysis_text: str) -> List[Tuple[str, str]]:
     return results
 
 
+def _parse_gdb_source_locations(
+    analysis_text: str,
+) -> list[tuple[str, int]]:
+    """Extract ``(file_path, line_number)`` pairs from GDB backtrace output.
+
+    GDB emits ``at src/crash.cpp:15`` on every frame that has debug info.
+    The first match is the innermost (crashing) frame — the most useful one.
+    Returns unique ``(path, line)`` pairs in frame order.
+    """
+    seen: set = set()
+    results: list[tuple[str, int]] = []
+    for m in _GDB_AT_RE.finditer(analysis_text):
+        path, line_str = m.group(1), int(m.group(2))
+        key = (os.path.basename(path).lower(), line_str)
+        if key not in seen:
+            seen.add(key)
+            results.append((path, line_str))
+    return results
+
+
+def _extract_gdb_functions(analysis_text: str) -> list[str]:
+    """Extract function names from GDB ``#N ... in func_name (`` frames.
+
+    Strips C++ namespace prefixes (``foo::bar::Baz`` → ``Baz``).
+    Skips obvious runtime/libc frames (``__libc_start_main``, ``??``, etc.).
+    Returns unique names in stack order (frame 0 first).
+    """
+    _SKIP = frozenset(
+        {
+            "??",
+            "__libc_start_main",
+            "__GI___libc_start_main",
+            "_start",
+            "__cxa_throw",
+            "__cxa_allocate_exception",
+        }
+    )
+    seen: set = set()
+    results: list[str] = []
+    for m in _GDB_FRAME_FUNC_RE.finditer(analysis_text):
+        raw = m.group(1)
+        bare = raw.rsplit("::", 1)[-1] if "::" in raw else raw
+        if bare in _SKIP or bare.startswith("__"):
+            continue
+        if bare not in seen:
+            seen.add(bare)
+            results.append(bare)
+    return results
+
+
 def _find_file_in_repo(
     filename: str,
     repo_path: str,
-    budget: Optional[Dict[str, float | int | bool]] = None,
-) -> List[str]:
-    """Walk the repo to find files matching the given basename (ignores .gitignore)."""
-    matches = []
+    budget: dict[str, float | int | bool] | None = None,
+) -> list[str]:
+    """Walk the repo to find files matching the given basename (ignores .gitignore).
+
+    ``followlinks=False`` prevents symlinks from escaping the repo root.
+    """
+    matches: list[str] = []
     target = filename.lower()
-    for dirpath, dirnames, filenames in os.walk(repo_path):
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         _prune_dirs_for_lookup(dirnames)
         if _is_budget_exhausted(budget):
             logger.warning("Source lookup budget exhausted while searching for file %s", filename)
             break
         for f in filenames:
             if not _consume_budget_file(budget):
-                logger.warning("Source lookup budget exhausted while scanning files for %s", filename)
+                logger.warning(
+                    "Source lookup budget exhausted while scanning files for %s", filename
+                )
                 return matches
             if f.lower() == target:
                 matches.append(os.path.join(dirpath, f))
@@ -267,9 +368,9 @@ def _find_file_in_repo(
 def _find_function_in_repo(
     function_name: str,
     repo_path: str,
-    module_hint: Optional[str] = None,
-    budget: Optional[Dict[str, float | int | bool]] = None,
-) -> List[Tuple[str, int]]:
+    module_hint: str | None = None,
+    budget: dict[str, float | int | bool] | None = None,
+) -> list[tuple[str, int]]:
     """Search source files for a function definition."""
     patterns = [
         rf"^\s*[\w\s\*&:<>,]+\b{re.escape(function_name)}\s*\(",
@@ -277,22 +378,27 @@ def _find_function_in_repo(
     ]
     combined = re.compile("|".join(patterns), re.MULTILINE)
 
-    matches: List[Tuple[str, int]] = []
+    matches: list[tuple[str, int]] = []
 
-    for dirpath, dirnames, filenames in os.walk(repo_path):
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         _prune_dirs_for_lookup(dirnames)
         if _is_budget_exhausted(budget):
-            logger.warning("Source lookup budget exhausted while searching for function %s", function_name)
+            logger.warning(
+                "Source lookup budget exhausted while searching for function %s", function_name
+            )
             break
         for fname in filenames:
             if not _consume_budget_file(budget):
-                logger.warning("Source lookup budget exhausted while scanning files for function %s", function_name)
+                logger.warning(
+                    "Source lookup budget exhausted while scanning files for function %s",
+                    function_name,
+                )
                 return matches
             if not any(fname.lower().endswith(ext) for ext in _SOURCE_EXTENSIONS):
                 continue
             filepath = os.path.join(dirpath, fname)
             try:
-                with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                with open(filepath, encoding="utf-8", errors="replace") as fh:
                     for line_num, line in enumerate(fh, 1):
                         if combined.search(line):
                             matches.append((filepath, line_num))
@@ -306,7 +412,7 @@ def _find_function_in_repo(
     return matches
 
 
-def _best_match(build_path: str, candidates: List[str]) -> str:
+def _best_match(build_path: str, candidates: list[str]) -> str:
     """Pick the candidate whose suffix best matches the build-machine path."""
     if len(candidates) == 1:
         return candidates[0]
@@ -326,9 +432,11 @@ def _best_match(build_path: str, candidates: List[str]) -> str:
     return best
 
 
-def _read_source_context(filepath: str, faulting_line: int, context: int = _SOURCE_CONTEXT_LINES) -> str:
+def _read_source_context(
+    filepath: str, faulting_line: int, context: int = _SOURCE_CONTEXT_LINES
+) -> str:
     try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return f"(unable to read {filepath})"
@@ -347,8 +455,8 @@ def _read_source_context(filepath: str, faulting_line: int, context: int = _SOUR
 
 
 def _format_function_matches(
-    matches: List[Tuple[str, int]],
-    module_name: Optional[str],
+    matches: list[tuple[str, int]],
+    module_name: str | None,
     function_name: str,
     search_method: str,
     max_show: int = 3,
@@ -371,16 +479,29 @@ def _format_function_matches(
     return result
 
 
-def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Optional[str]:
+def locate_faulting_source(analysis_text: str, repo_path: str | None) -> str | None:
     """Locate faulting source code using a multi-level fallback chain.
 
-    1. **PDB/DWARF source info** -- uses ``FAULTING_SOURCE_FILE`` when present.
-    2. **Function-name search** -- extracts ``SYMBOL_NAME`` (e.g.
-       ``MyAppCore!ProcessTreeNode``) and greps source files in *repo_path*.
-    3. **Stack-trace search** -- walks every ``module!Function+0xOffset``
-       frame from the stack trace and searches for definitions.
+    Level 0 — **GDB/LLDB ``at file:line``** — extracts ``at src/foo.cpp:42``
+    patterns directly from GDB backtrace output.  This is the richest source
+    and is checked first because it avoids a full repo walk when file name
+    and line are already known.
 
-    Searches the entire repo tree including gitignored directories
+    Level 1 — **PDB/DWARF ``FAULTING_SOURCE_FILE``** — CDB/WinDbg structured
+    debug-info output (``!analyze -v``).
+
+    Level 2 — **CDB ``SYMBOL_NAME`` function search** — extracts the faulting
+    function from ``SYMBOL_NAME: module!Function+0xOffset`` and greps for
+    its definition across the repo.
+
+    Level 3a — **CDB stack-frame function search** — walks every
+    ``module!Function+0xOffset`` frame and searches for definitions.
+
+    Level 3b — **GDB frame function search** — walks every ``#N ... in func (``
+    frame from GDB output; used when Level 0 found no file matches and no CDB
+    frames were present.
+
+    All levels search the entire repo tree (including gitignored directories)
     so shared-component source is discoverable.
     """
     if not repo_path:
@@ -391,7 +512,26 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
         return None
     budget = _new_source_lookup_budget()
 
-    # ----- Level 1: source file + line number -----
+    # ----- Level 0: GDB/LLDB "at file.cpp:line" (highest fidelity) -----
+    gdb_locations = _parse_gdb_source_locations(analysis_text)
+    for gdb_path, gdb_line in gdb_locations:
+        if _is_budget_exhausted(budget):
+            break
+        filename = os.path.basename(gdb_path)
+        candidates = _find_file_in_repo(filename, repo_path, budget)
+        if candidates:
+            best = _best_match(gdb_path, candidates)
+            header = (
+                f"### Faulting Source Code\n"
+                f"- **Source:** `{gdb_path}` (from GDB debug info)\n"
+                f"- **Local path:** `{best}`\n"
+                f"- **Faulting line:** {gdb_line}\n"
+            )
+            snippet = _read_source_context(best, gdb_line)
+            return header + f"\n```cpp\n{snippet}\n```\n\n"
+        logger.debug("Level 0: GDB file %s not found in repo", filename)
+
+    # ----- Level 1: PDB/DWARF FAULTING_SOURCE_FILE (CDB output) -----
     faulting_file, faulting_line = _parse_faulting_source(analysis_text)
     if faulting_file:
         filename = os.path.basename(faulting_file)
@@ -408,24 +548,36 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
                 snippet = _read_source_context(best, faulting_line)
                 return header + f"\n```cpp\n{snippet}\n```\n\n"
             return header + "\n"
-        logger.info("Source file %s not found in repo, trying function search", filename)
+        logger.info("Level 1: source file %s not found in repo", filename)
 
-    # ----- Level 2: SYMBOL_NAME function search -----
+    # ----- Level 2: CDB SYMBOL_NAME function search -----
     module_name, function_name = _parse_faulting_module_function(analysis_text)
     if function_name:
-        logger.info("Fallback: searching for function %s (module %s)", function_name, module_name)
+        logger.info("Level 2: searching for function %s (module %s)", function_name, module_name)
         matches = _find_function_in_repo(function_name, repo_path, module_name, budget)
         if matches:
-            return _format_function_matches(matches, module_name, function_name, "Symbol Name Search")
+            return _format_function_matches(
+                matches, module_name, function_name, "Symbol Name Search"
+            )
 
-    # ----- Level 3: Stack-trace function search -----
+    # ----- Level 3a: CDB module!Function stack-frame search -----
     stack_functions = _extract_stack_functions(analysis_text)
     for frame_module, frame_func in stack_functions:
+        if _is_budget_exhausted(budget):
+            break
         matches = _find_function_in_repo(frame_func, repo_path, frame_module, budget)
         if matches:
             return _format_function_matches(matches, frame_module, frame_func, "Stack Trace Search")
-        if _is_budget_exhausted(budget):
-            break
+
+    # ----- Level 3b: GDB frame function search -----
+    if not _is_budget_exhausted(budget):
+        gdb_functions = _extract_gdb_functions(analysis_text)
+        for func_name in gdb_functions:
+            if _is_budget_exhausted(budget):
+                break
+            matches = _find_function_in_repo(func_name, repo_path, None, budget)
+            if matches:
+                return _format_function_matches(matches, None, func_name, "GDB Frame Search")
 
     # ----- Nothing found -----
     if bool(budget.get("stopped")):
@@ -438,13 +590,16 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
             f"- File budget: `{_SOURCE_LOOKUP_MAX_FILES}`\n\n"
             f"Try narrowing `repo_path` to the most relevant module subtree.\n"
         )
-    if function_name or faulting_file:
+    # gdb_functions is only defined when Level 3b ran (budget not exhausted then)
+    _gdb_funcs_found = (not _is_budget_exhausted(budget)) and bool(locals().get("gdb_functions"))
+    if function_name or faulting_file or gdb_locations or _gdb_funcs_found:
+        first_gdb = gdb_locations[0][0] if gdb_locations else None
         return (
             f"### Faulting Source Code\n"
             f"Could not locate source in `{repo_path}`.\n"
             f"- Module: `{module_name or 'Unknown'}`\n"
             f"- Function: `{function_name or 'Unknown'}`\n"
-            f"- Build path: `{faulting_file or 'N/A'}`\n\n"
+            f"- Build path: `{faulting_file or first_gdb or 'N/A'}`\n\n"
         )
     return None
 
@@ -455,10 +610,15 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
 
 
 def _evict_lru_session() -> None:
+    """Evict the least-recently-used session.  Caller must hold ``_session_lock``."""
     if not active_sessions:
         return
     oldest_id, oldest_session = next(iter(active_sessions.items()))
-    logger.info("Evicting LRU session %s (pool limit %d reached)", oldest_id, _max_concurrent_sessions)
+    logger.info(
+        "Evicting LRU session %s (pool limit %d reached)",
+        oldest_id,
+        _max_concurrent_sessions,
+    )
     try:
         if oldest_session is not None:
             oldest_session.shutdown()
@@ -469,11 +629,11 @@ def _evict_lru_session() -> None:
 
 def get_or_create_session(
     dump_path: str,
-    cdb_path: Optional[str] = None,
-    debugger_path: Optional[str] = None,
+    cdb_path: str | None = None,
+    debugger_path: str | None = None,
     debugger_type: str = "auto",
-    symbols_path: Optional[str] = None,
-    image_path: Optional[str] = None,
+    symbols_path: str | None = None,
+    image_path: str | None = None,
     replace_if_config_mismatch: bool = False,
     timeout: int = 30,
     verbose: bool = False,
@@ -483,51 +643,57 @@ def get_or_create_session(
 
     Enforces ``_max_concurrent_sessions``: if the limit is reached the
     least-recently-used session is evicted.
+
+    The entire check-and-create sequence is serialised by ``_session_lock``
+    to prevent two concurrent callers from both determining a session is
+    missing and both attempting to create it.
     """
     if not dump_path:
         raise ValueError("dump_path must be provided")
 
     session_id = os.path.abspath(dump_path)
-
     effective_debugger_path = debugger_path or cdb_path
 
-    existing = active_sessions.get(session_id)
-    config_mismatch = existing is not None and (
-        (existing.symbols_path or "") != (symbols_path or "")
-        or (existing.image_path or "") != (image_path or "")
-    )
+    with _session_lock:
+        existing = active_sessions.get(session_id)
+        config_mismatch = existing is not None and (
+            (existing.symbols_path or "") != (symbols_path or "")
+            or (existing.image_path or "") != (image_path or "")
+        )
 
-    if config_mismatch and replace_if_config_mismatch:
-        try:
-            existing.shutdown()
-        except Exception:
-            pass
-        finally:
-            active_sessions[session_id] = None
+        if config_mismatch and replace_if_config_mismatch and existing is not None:
+            try:
+                existing.shutdown()
+            except Exception:
+                pass
+            finally:
+                del active_sessions[session_id]
 
-    if session_id not in active_sessions or active_sessions[session_id] is None:
-        while active_session_count() >= _max_concurrent_sessions:
-            _evict_lru_session()
+        if session_id not in active_sessions or active_sessions[session_id] is None:
+            while active_session_count() >= _max_concurrent_sessions:
+                _evict_lru_session()
 
-        try:
-            session = create_session(
-                dump_path=dump_path,
-                debugger_path=effective_debugger_path,
-                symbols_path=symbols_path,
-                image_path=image_path,
-                timeout=timeout,
-                verbose=verbose,
-                debugger_type=debugger_type,
-            )
-            active_sessions[session_id] = session
-        except Exception as e:
-            raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to create session: {e}"))
-    elif config_mismatch and not replace_if_config_mismatch:
-        pass
-    else:
-        active_sessions.move_to_end(session_id)
+            try:
+                session = create_session(
+                    dump_path=dump_path,
+                    debugger_path=effective_debugger_path,
+                    symbols_path=symbols_path,
+                    image_path=image_path,
+                    timeout=timeout,
+                    verbose=verbose,
+                    debugger_type=debugger_type,
+                )
+                active_sessions[session_id] = session
+            except Exception as e:
+                raise McpError(
+                    ErrorData(code=INTERNAL_ERROR, message=f"Failed to create session: {e}")
+                )
+        elif config_mismatch and not replace_if_config_mismatch:
+            pass  # return existing session even though config differs
+        else:
+            active_sessions.move_to_end(session_id)
 
-    return active_sessions[session_id]
+        return active_sessions[session_id]
 
 
 def close_session(dump_path: str) -> bool:
@@ -536,14 +702,15 @@ def close_session(dump_path: str) -> bool:
 
     session_id = os.path.abspath(dump_path)
 
-    if session_id in active_sessions and active_sessions[session_id] is not None:
-        try:
-            active_sessions[session_id].shutdown()
-        except Exception:
-            pass
-        finally:
-            del active_sessions[session_id]
-        return True
+    with _session_lock:
+        if session_id in active_sessions and active_sessions[session_id] is not None:
+            try:
+                active_sessions[session_id].shutdown()
+            except Exception:
+                pass
+            finally:
+                del active_sessions[session_id]
+            return True
     return False
 
 
@@ -565,12 +732,12 @@ def cleanup_all_sessions() -> None:
 async def _run_dump_analysis(
     args,
     *,
-    cdb_path: Optional[str],
-    debugger_path: Optional[str] = None,
+    cdb_path: str | None,
+    debugger_path: str | None = None,
     debugger_type: str = "auto",
-    symbols_path: Optional[str],
-    image_path: Optional[str],
-    repo_path: Optional[str],
+    symbols_path: str | None,
+    image_path: str | None,
+    repo_path: str | None,
     timeout: int,
     verbose: bool,
 ) -> list[TextContent]:
@@ -601,7 +768,9 @@ async def _run_dump_analysis(
 
     effective_repo_path = args.repo_path or repo_path
     if effective_repo_path:
-        source_section = await asyncio.to_thread(locate_faulting_source, analysis, effective_repo_path)
+        source_section = await asyncio.to_thread(
+            locate_faulting_source, analysis, effective_repo_path
+        )
         if source_section:
             results.append(source_section)
 
@@ -637,28 +806,32 @@ def _dump_path_hint(debugger_type: str = "auto") -> str:
             hint = f"\n\nFound {len(dumps)} dump(s) in {local_path}:\n"
             for i, d in enumerate(dumps[:10]):
                 try:
-                    size = round(os.path.getsize(d) / (1024 * 1024), 2)
+                    size_str = str(round(os.path.getsize(d) / (1024 * 1024), 2))
                 except OSError:
-                    size = "?"
-                hint += f"  {i+1}. {d} ({size} MB)\n"
+                    size_str = "?"
+                hint += f"  {i + 1}. {d} ({size_str} MB)\n"
     return hint
 
 
 async def handle_analyze_dump(
     arguments: dict,
     *,
-    cdb_path: Optional[str],
-    debugger_path: Optional[str] = None,
+    cdb_path: str | None,
+    debugger_path: str | None = None,
     debugger_type: str = "auto",
-    symbols_path: Optional[str],
-    image_path: Optional[str],
-    repo_path: Optional[str],
+    symbols_path: str | None,
+    image_path: str | None,
+    repo_path: str | None,
     timeout: int,
     verbose: bool,
     AnalyzeDumpParams,
 ) -> list[TextContent]:
     if "dump_path" not in arguments or not arguments.get("dump_path"):
-        return [TextContent(type="text", text=f"Please provide a dump_path.{_dump_path_hint(debugger_type)}")]
+        return [
+            TextContent(
+                type="text", text=f"Please provide a dump_path.{_dump_path_hint(debugger_type)}"
+            )
+        ]
 
     args = AnalyzeDumpParams(**arguments)
     return await _run_dump_analysis(
@@ -677,18 +850,22 @@ async def handle_analyze_dump(
 async def handle_open_dump(
     arguments: dict,
     *,
-    cdb_path: Optional[str],
-    debugger_path: Optional[str] = None,
+    cdb_path: str | None,
+    debugger_path: str | None = None,
     debugger_type: str = "auto",
-    symbols_path: Optional[str],
-    image_path: Optional[str],
-    repo_path: Optional[str],
+    symbols_path: str | None,
+    image_path: str | None,
+    repo_path: str | None,
     timeout: int,
     verbose: bool,
     OpenDumpParams,
 ) -> list[TextContent]:
     if "dump_path" not in arguments or not arguments.get("dump_path"):
-        return [TextContent(type="text", text=f"Please provide a dump_path.{_dump_path_hint(debugger_type)}")]
+        return [
+            TextContent(
+                type="text", text=f"Please provide a dump_path.{_dump_path_hint(debugger_type)}"
+            )
+        ]
 
     args = OpenDumpParams(**arguments)
     return await _run_dump_analysis(
@@ -707,14 +884,16 @@ async def handle_open_dump(
 async def handle_run_cmd(
     arguments: dict,
     *,
-    cdb_path: Optional[str],
-    debugger_path: Optional[str] = None,
+    cdb_path: str | None,
+    debugger_path: str | None = None,
     debugger_type: str = "auto",
-    symbols_path: Optional[str],
-    image_path: Optional[str],
+    symbols_path: str | None,
+    image_path: str | None,
+    repo_path: str | None = None,  # accepted but not used — keeps **debugger_ctx passthrough clean
     timeout: int,
     verbose: bool,
     RunCommandParams,
+    **_extra,
 ) -> list[TextContent]:
     args = RunCommandParams(**arguments)
 
@@ -747,7 +926,11 @@ async def handle_run_cmd(
         verbose=verbose,
     )
     output = await asyncio.to_thread(session.send_command, args.command, args.timeout)
-    return [TextContent(type="text", text=f"Command: {args.command}\n\n```\n" + "\n".join(output) + "\n```")]
+    return [
+        TextContent(
+            type="text", text=f"Command: {args.command}\n\n```\n" + "\n".join(output) + "\n```"
+        )
+    ]
 
 
 async def handle_close_dump(arguments: dict, *, CloseDumpParams) -> list[TextContent]:
@@ -767,7 +950,9 @@ async def handle_list_dumps(
 
     search_dir = args.directory_path or get_local_dumps_path(debugger_type)
     if not search_dir:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message="No directory specified and no default found"))
+        raise McpError(
+            ErrorData(code=INVALID_PARAMS, message="No directory specified and no default found")
+        )
 
     if not os.path.isdir(search_dir):
         raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Directory not found: {search_dir}"))
@@ -787,9 +972,9 @@ async def handle_list_dumps(
     result = f"Found {len(dumps)} dump(s) in {search_dir}:\n\n"
     for i, d in enumerate(dumps):
         try:
-            size = round(os.path.getsize(d) / (1024 * 1024), 2)
+            size_str = str(round(os.path.getsize(d) / (1024 * 1024), 2))
         except OSError:
-            size = "?"
-        result += f"{i+1}. {d} ({size} MB)\n"
+            size_str = "?"
+        result += f"{i + 1}. {d} ({size_str} MB)\n"
 
     return [TextContent(type="text", text=result)]

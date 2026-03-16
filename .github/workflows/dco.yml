@@ -1,0 +1,44 @@
+name: DCO
+
+on:
+  pull_request_target:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dco:
+    name: DCO Sign-Off Check
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Fetch base branch
+        run: |
+          git remote add upstream https://github.com/${{ github.repository }}.git
+          git fetch upstream ${{ github.event.pull_request.base.ref }} --depth=1
+      - name: Check DCO sign-off
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          FAILED=0
+          for SHA in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            if ! git log -1 --format='%B' "$SHA" | grep -qE '^Signed-off-by: .+ <.+>'; then
+              echo "::error::Commit $SHA is missing 'Signed-off-by' trailer"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "All commits must include a DCO sign-off."
+            echo "Use: git commit -s -m \"your message\""
+            echo "To fix existing commits: git rebase --signoff HEAD~N && git push --force-with-lease"
+            exit 1
+          fi
+          echo "All commits have DCO sign-off."

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class DebuggerError(Exception):
     """Base exception for debugger-related errors."""
+
     pass
 
 
@@ -22,14 +21,30 @@ class DebuggerSession(ABC):
     tool layer can work with any debugger transparently.
     """
 
-    dump_path: Optional[str]
-    symbols_path: Optional[str]
-    image_path: Optional[str]
+    dump_path: str | None
+    symbols_path: str | None
+    image_path: str | None
     timeout: int
     verbose: bool
 
+    def __init__(
+        self,
+        dump_path: str,
+        debugger_path: str | None = None,
+        symbols_path: str | None = None,
+        image_path: str | None = None,
+        timeout: int = 30,
+        verbose: bool = False,
+        **kwargs: object,
+    ) -> None:
+        self.dump_path = dump_path
+        self.symbols_path = symbols_path
+        self.image_path = image_path
+        self.timeout = timeout
+        self.verbose = verbose
+
     @abstractmethod
-    def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
+    def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         """Send a command to the debugger and return the output lines."""
         ...
 
@@ -95,13 +110,13 @@ class DebuggerSession(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_local_dumps_path() -> Optional[str]:
+    def get_local_dumps_path() -> str | None:
         """Return the platform-specific default crash dump directory."""
         ...
 
     @staticmethod
     @abstractmethod
-    def find_debugger_executable(custom_path: Optional[str] = None) -> Optional[str]:
+    def find_debugger_executable(custom_path: str | None = None) -> str | None:
         """Locate the debugger executable on disk."""
         ...
 

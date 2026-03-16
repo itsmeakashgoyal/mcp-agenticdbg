@@ -66,9 +66,9 @@ ehthumbs.db
 *.crash
 core
 core.*
-!examples/*.cpp
-!examples/*.c
-!examples/*.h
+!examples/common/*.cpp
+!examples/common/*.c
+!examples/common/*.h
 
 # Debug symbols
 *.pdb
@@ -76,14 +76,12 @@ core.*
 *.dwarf
 
 # Build outputs (examples)
-examples/*.exe
-examples/*.o
-examples/*.obj
-examples/*.ilk
-examples/*.exp
-examples/*.lib
-examples/crash_example
-examples/crash_example.exe
+examples/**/*.exe
+examples/**/*.o
+examples/**/*.obj
+examples/**/*.ilk
+examples/**/*.exp
+examples/**/*.lib
 
 # Logs
 *.log

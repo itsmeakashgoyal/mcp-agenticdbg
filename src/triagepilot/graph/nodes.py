@@ -6,21 +6,17 @@ partial dict with the keys it wants to update.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import Any
 
 from ..tools.debugger_tools import (
     get_or_create_session,
-    close_session,
     locate_faulting_source,
 )
 from ..tools.git_tools import (
     _collect_changed_paths,
     _filter_shared_paths,
     _write_shared_patch_md,
-    _run_process,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,12 +132,15 @@ def _get_llm(state: dict):
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
+
         return ChatOpenAI(model=model, api_key=api_key)
     elif provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+
         return ChatAnthropic(model=model, api_key=api_key)
     elif provider == "azure":
         from langchain_openai import AzureChatOpenAI
+
         return AzureChatOpenAI(model=model, api_key=api_key)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")

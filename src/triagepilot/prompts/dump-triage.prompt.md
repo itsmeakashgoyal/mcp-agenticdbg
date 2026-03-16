@@ -1,4 +1,4 @@
-Perform comprehensive analysis of a crash dump with detailed metadata extraction and structured reporting. Supports Windows (.dmp), Linux (core dumps), and macOS (.crash / core dumps).
+Perform comprehensive analysis of a crash dump with deep inspection, structured reporting, and actionable fix guidance. Supports Windows (.dmp via CDB), Linux (core dumps via GDB), and macOS (.crash / core dumps via LLDB).
 
 ## QUICK USAGE (SHORT PROMPT)
 
@@ -19,7 +19,7 @@ When these arguments are provided, do not ask for them again unless missing or i
 - Use `list_dumps` to help find available dumps
 - Ask for optional `symbols_path` and `image_path` when analyzing private binaries
 
-### Step 2: Comprehensive Dump Analysis
+### Step 2: Initial Crash Analysis
 **Analyze the dump file:**
 
 **Tool:** `analyze_dump` (preferred) or `open_dump`
@@ -32,32 +32,86 @@ When these arguments are provided, do not ask for them again unless missing or i
   - `include_modules`: true
   - `include_threads`: true
 
-The tool automatically runs the appropriate analysis command for the platform:
-- **Windows (CDB):** `!analyze -v`
-- **Linux (GDB):** `bt full`
-- **macOS (LLDB):** `bt all`
+The tool automatically runs a rich multi-section analysis for the detected platform:
+- **Windows (CDB):** `.lastevent`, `!analyze -v`, `kb`, `~*kb` (all-thread backtraces), `r` (registers), `lm`, `vertarget`
+- **Linux (GDB):** `bt full`, `info threads`, `info registers`, `info sharedlibrary`, `info proc`
+- **macOS (LLDB):** `process status`, `frame info`, `bt`, `bt all`, `register read`, `image list`
 
 **Source lookup is automatic and multi-level.** The tool uses a fallback chain:
-1. **Debug info source** — exact file + line when debug symbols have source info.
-2. **Function name search** — greps the repo for the faulting function definition
-   using `SYMBOL_NAME` (e.g. `MyAppCore!ProcessTreeNode`). Works with
-   stripped/public-only symbols that lack source file info.
-3. **Stack trace search** — walks every `module!Function+0xOffset` frame from
-   the call stack and searches for definitions in the repo.
+1. **Debug info source** (GDB/LLDB `at file:line`, CDB `FAULTING_SOURCE_FILE`) — exact file + line when debug symbols have source info.
+2. **Symbol name search** (CDB `SYMBOL_NAME: module!Function`) — greps the repo for the faulting function definition. Works with stripped/public-only symbols.
+3. **Stack trace search** — walks every frame (`module!Function+0xOffset` on CDB, `#N in func` on GDB) and searches for definitions in the repo.
 
-All three levels scan the **entire repo tree including gitignored directories**
-(e.g. `vendor/`, `third_party/`), so shared-component source is always discoverable.
+All levels scan the **entire repo tree including gitignored directories** (e.g. `vendor/`, `third_party/`), so shared-component source is always discoverable.
 
-**Extract additional metadata with:** `run_debugger_cmd`
+### Step 3: Deep Inspection
 
-Platform-specific useful commands:
-- **Windows (CDB):** `vertarget`, `lm`, `k`, `.time`, `!peb`, `r`
-- **Linux (GDB):** `info proc`, `info sharedlibrary`, `bt`, `info threads`, `info registers`
-- **macOS (LLDB):** `process status`, `image list`, `bt`, `thread list`, `register read`
+After the initial analysis, use `run_debugger_cmd` to gather deeper context based on the crash type. **Always gather at minimum: registers, all-thread backtraces, and disassembly around the crash point.** Then add crash-type-specific commands from the table below.
 
-**Cleanup:** `close_dump`
+#### Platform Command Reference
 
-### Step 2b: Source Code Investigation (When Debug Symbols Are Incomplete)
+| Inspection | CDB (Windows) | GDB (Linux) | LLDB (macOS) |
+|---|---|---|---|
+| **All-thread backtraces** | `~*kb` | `thread apply all bt` | `bt all` |
+| **Exception context** | `.ecxr` | *(automatic)* | `thread info` |
+| **Registers** | `r` | `info registers` | `register read` |
+| **Disassemble crash point** | `u @rip L20` or `uf <function>` | `disassemble` | `disassemble --pc --count 30` |
+| **Local variables** | `.frame 0` then `dv /t` | `info locals` | `frame variable` |
+| **Evaluate expression** | `?? <expr>` or `? <expr>` | `print <expr>` | `expression <expr>` |
+| **Memory dump** | `db <addr> L<len>` | `x/<N>xb <addr>` | `memory read --count <N> --format x <addr>` |
+| **Memory map / regions** | `!address` | `info proc mappings` | `process status --verbose` |
+| **Module list** | `lm` | `info sharedlibrary` | `image list` |
+| **Target / OS info** | `vertarget` | `info proc` | `target list` |
+| **Process environment** | `!peb` | `show environment` | *(N/A)* |
+| **Heap state** | `!heap -s` | `info heap` (if available) | *(N/A)* |
+| **Lock / critical section** | `!locks` | `info threads` (check for mutex) | `thread list` |
+
+#### Crash-Type Deep Dive Playbook
+
+Use the following additional commands based on the crash type identified in Step 2:
+
+**Access Violation / Segfault / SIGBUS:**
+1. Examine the faulting address — is it NULL, small (null-deref + offset), wild, or use-after-free?
+2. Dump memory around the faulting address: `db <addr>` / `x/32xb <addr>` / `memory read <addr>`
+3. Check memory region permissions: `!address <addr>` / `info proc mappings`
+4. Walk the stack frames inspecting locals to find when the bad pointer was introduced
+
+**Heap Corruption / Double-Free:**
+1. Heap summary: `!heap -s` (CDB) / application-specific heap commands
+2. Heap validation: `!heap -a <heap_handle>` (CDB)
+3. Check if the crash is in an allocator function (malloc, free, RtlAllocateHeap, etc.)
+4. Examine surrounding heap metadata: dump memory before/after the corrupt block
+5. Check all threads for concurrent heap operations
+
+**Stack Overflow:**
+1. Examine stack depth and look for deep recursion patterns
+2. Check thread stack limits: `!teb` (CDB) / `info proc mappings` (GDB)
+3. Look for unbounded recursive calls in the backtrace
+4. Measure frame size if large local arrays are involved
+
+**Deadlock / Hang (if applicable to dump):**
+1. Show all thread backtraces — look for threads blocked on synchronization
+2. Check lock ownership: `!locks` (CDB) / look for mutex/futex in stacks
+3. Identify the cycle: Thread A holds Lock X and waits on Lock Y, Thread B holds Lock Y and waits on Lock X
+4. Check for thread pool exhaustion
+
+**Use-After-Free / Dangling Pointer:**
+1. Dump memory at the faulting address — look for fill patterns (0xFEEEFEEE on Windows, 0xDEADBEEF, etc.)
+2. Check if the address falls within freed heap blocks
+3. Walk up the stack to find where the dangling pointer came from
+4. Look at the object's vtable pointer (first 8 bytes) for corruption signatures
+
+**Assertion / Abort / SIGABRT:**
+1. Look at the abort message in the stack or output
+2. The crashing frame is typically the assertion macro — walk up to find the actual failure condition
+3. Examine the variables involved in the assertion condition
+
+**Unhandled C++ Exception / SIGABRT from throw:**
+1. Check for `__cxa_throw` / `CxxThrowException` in the stack
+2. Walk up past the exception handling frames to find the throw site
+3. Examine the exception object if possible
+
+### Step 3b: Source Code Investigation (When Debug Symbols Are Incomplete)
 
 When the analysis does NOT produce `FAULTING_SOURCE_FILE` / `FAULTING_SOURCE_LINE_NUMBER`
 (common with release builds or shared components), the tool still locates the faulting
@@ -69,19 +123,21 @@ function via the fallback search described above.
 - Only public symbols are available
 
 Use the function definition shown in the analysis output to understand the bug
-and apply the fix directly to whichever file contains the function—whether it is
+and apply the fix directly to whichever file contains the function — whether it is
 a repo-tracked file or a shared/gitignored file. The PR/patch tool selection gate
 (below) handles routing the changes correctly.
 
-### Step 3: Generate Analysis Report
+### Step 4: Generate Analysis Report
 
 Always return the result in this exact numbered structure:
-1) exception code + faulting module/function
-2) full symbolized stack trace
-3) likely root cause
-4) concrete fixes in current repo and apply them (shared or repo-tracked, either is fine)
-5) verification steps
-6) create a PR/Patch once changes are finalized (use `jira_id` if provided)
+1) Exception code/signal + faulting module/function
+2) Full symbolized stack trace (crashing thread + any relevant secondary threads)
+3) Register state at crash point
+4) Memory context (faulting address region, relevant data)
+5) Root cause analysis with evidence chain
+6) Concrete fixes in current repo — apply them (shared or repo-tracked, either is fine)
+7) Verification steps
+8) Create a PR/Patch once changes are finalized (use `jira_id` if provided)
 
 ## OUTPUT FORMAT
 
@@ -90,59 +146,101 @@ Always return the result in this exact numbered structure:
 **Analysis Date:** [Date]
 **Dump File:** [filename]
 **File Path:** [Full path]
+**Platform:** [Windows/Linux/macOS] — [Debugger: CDB/GDB/LLDB]
 
 ## Executive Summary
-- **Crash Type:** [Exception type]
+- **Crash Type:** [Exception type / signal name]
 - **Severity:** [Critical/High/Medium/Low]
 - **Root Cause:** [Brief description]
+- **Confidence:** [High/Medium/Low — based on symbol quality and evidence]
 - **Recommended Action:** [Next steps]
 
 ## Dump Metadata
 - **Creation Time:** [Timestamp]
 - **OS / Platform:** [OS version and architecture]
 - **Process Name:** [Process name and PID]
+- **Debugger:** [CDB/GDB/LLDB with version if available]
 
-## Crash Analysis
-**Exception Details:**
-- **Exception Code / Signal:** [0xC0000005, SIGSEGV, etc.]
-- **Exception Address:** [Address]
-- **Faulting Module:** [module name]
+## Crash Details
 
-**Call Stack:**
-[Stack frames with module!function+offset or file:line]
+### Exception / Signal
+- **Exception Code / Signal:** [0xC0000005 / SIGSEGV / EXC_BAD_ACCESS / etc.]
+- **Exception Description:** [Access Violation reading 0x0 / Segmentation fault / etc.]
+- **Faulting Address:** [Address being accessed]
+- **Instruction Address:** [Address of faulting instruction]
+- **Faulting Module:** [module name + version if available]
+- **Faulting Function:** [fully qualified function name + offset]
 
-**Thread Information:**
-- **Crashing Thread ID:** [ID]
-- **Thread Count:** [Total]
+### Register State
+[Key registers at crash point, especially instruction pointer, stack pointer, and any registers involved in the faulting instruction]
+
+### Faulting Disassembly
+[5-10 instructions around the crash point, with the faulting instruction highlighted]
+
+### Crashing Thread Call Stack
+[Full stack frames with module!function+offset and file:line where available]
+
+### All Thread Backtraces
+[Summary of all threads — highlight any that are relevant (blocked, holding locks, performing related operations)]
+
+### Loaded Modules
+[Key modules — especially the faulting module and any without symbols]
+
+## Memory Analysis
+- **Faulting Address Region:** [What memory region does the faulting address fall in — heap, stack, unmapped, freed, etc.]
+- **Data at Faulting Address:** [Hex dump if readable, or "unmapped/inaccessible"]
+- **Relevant Pointer Chain:** [If the crash involves a chain of dereferences, show the chain]
 
 ## Root Cause Analysis
-- **What happened:** [Technical description]
-- **Why it happened:** [Contributing factors]
-- **Code location:** [Function/line if known]
+- **What happened:** [Technical description of the immediate failure]
+- **Why it happened:** [Contributing factors — logic error, race condition, missing null check, etc.]
+- **Evidence chain:** [Connect the register state, memory contents, and stack trace to the root cause]
+- **Code location:** [Function/file:line if known, or best-match function from repo search]
+- **Crash classification:** [NULL dereference / use-after-free / buffer overflow / stack overflow / race condition / assertion failure / unhandled exception / etc.]
+
+## Faulting Source Code
+[Source code snippet around the faulting location, with the faulting line highlighted]
+
+## Fix
+### Root Cause Fix
+[The actual code change — applied directly to the file if repo_path was provided]
+
+### Defensive Improvements (if applicable)
+[Additional hardening — bounds checks, null guards, assertions — only if directly relevant]
 
 ## Recommendations
 ### Immediate Actions
 1. [Action item]
 
-### Investigation Steps
-1. [Follow-up steps]
+### Verification Steps
+1. [How to verify the fix resolves the crash]
+2. [How to reproduce the crash for testing]
 
 ### Prevention
-1. [Code changes needed]
+1. [Code changes, static analysis rules, or testing strategies to prevent recurrence]
+
+### Related Risk Areas
+[Other code paths that may have the same pattern — similar functions, callers of the faulting function, etc.]
 ```
 
 ## ANALYSIS DEPTH
 Provide technical details for developers to:
-- Understand the failure mechanism
-- Identify root cause in source code
-- Implement appropriate fixes
-- Prevent similar issues
+- Understand the failure mechanism at the instruction level
+- Trace the corrupted state back to its origin
+- Identify the root cause in source code with confidence
+- Implement a correct, minimal fix
+- Verify the fix addresses the root cause (not just the symptom)
+- Identify related code that may have the same vulnerability
 
-## OPTIONAL POST-ANALYSIS DEVELOPMENT FLOW
-If the user explicitly asks for code changes after the dump analysis:
-1. Implement the requested code changes.
-2. Validate changes (run tests/build checks where possible).
-3. **Only if the user explicitly asks to raise a PR**, follow the MANDATORY TOOL SELECTION GATE below.
+## POST-ANALYSIS DEVELOPMENT FLOW
+
+**Code fixes are part of the required report (step 6).** When `repo_path` is provided and
+the faulting source is located, you MUST write the concrete fix directly in the source file —
+do not just describe it. Apply the minimal, correct change to address the root cause.
+
+After applying the fix:
+1. Validate changes (run tests/build checks where possible).
+2. **Only if the user explicitly asks to raise a PR**, follow the MANDATORY TOOL SELECTION GATE below.
 
 **Do not create commits or PRs automatically. PR creation must be user-requested explicitly.**
 

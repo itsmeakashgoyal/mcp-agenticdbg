@@ -1,14 +1,15 @@
 """Tests for CDBSession initialisation, validation, and helper methods."""
 
 import os
+
 import pytest
 
-from triagepilot.backends.cdb import CDBSession, CDBError, SLOW_COMMAND_PREFIXES
-
+from triagepilot.backends.cdb import CDBSession
 
 # ---------------------------------------------------------------------------
 # find_debugger_executable
 # ---------------------------------------------------------------------------
+
 
 class TestFindCdbExecutable:
     def test_custom_path_valid(self, tmp_path):
@@ -24,6 +25,7 @@ class TestFindCdbExecutable:
 # ---------------------------------------------------------------------------
 # _normalize_symbols_path
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeSymbolsPath:
     def _call(self, value):
@@ -54,6 +56,7 @@ class TestNormalizeSymbolsPath:
 # _normalize_image_path
 # ---------------------------------------------------------------------------
 
+
 class TestNormalizeImagePath:
     def _call(self, value):
         inst = CDBSession.__new__(CDBSession)
@@ -77,6 +80,7 @@ class TestNormalizeImagePath:
 # _is_slow_command
 # ---------------------------------------------------------------------------
 
+
 class TestIsSlowCommand:
     def _call(self, cmd):
         inst = CDBSession.__new__(CDBSession)
@@ -98,6 +102,7 @@ class TestIsSlowCommand:
 # ---------------------------------------------------------------------------
 # __init__ validation
 # ---------------------------------------------------------------------------
+
 
 class TestInitValidation:
     def test_no_target_raises(self):
