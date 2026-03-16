@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .base import DebuggerError, DebuggerSession
 
@@ -152,6 +152,11 @@ class LLDBSession(DebuggerSession):
     def get_local_dumps_path() -> Optional[str]:
         """Return the default crash dump directory for the current platform."""
         if sys.platform == "darwin":
+            # macOS core dumps are written to /cores/core.<pid> by default.
+            if os.path.isdir("/cores"):
+                return "/cores"
+            # Fallback: Apple crash reporter text reports (not binary core dumps,
+            # but useful for locating crash context).
             diag = os.path.expanduser("~/Library/Logs/DiagnosticReports")
             if os.path.isdir(diag):
                 return diag
@@ -161,6 +166,224 @@ class LLDBSession(DebuggerSession):
                 if os.path.isdir(path):
                     return path
         return None
+
+    # -- DebuggerSession rich-analysis overrides ----------------------------
+
+    def run_crash_analysis(self) -> str:
+        """Produce a rich multi-section crash report.
+
+        Combines process status, all-thread backtraces, register state, and
+        loaded images into a single string for downstream triage.
+        """
+        sections: List[str] = []
+
+        def _try(label: str, cmd: str, cmd_timeout: Optional[int] = None) -> None:
+            try:
+                out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
+                if out:
+                    sections.append(f"=== {label} ===")
+                    sections.extend(out)
+                    sections.append("")
+            except LLDBError as exc:
+                logger.debug("run_crash_analysis: %s failed: %s", label, exc)
+
+        _try("Process Status", "process status", 10)
+        _try("Crash Frame", "frame info", 10)
+        _try("Backtrace (full)", "bt", self.timeout)
+        _try("All Threads", "bt all", self.timeout)
+        _try("Registers", "register read", 15)
+        _try("Loaded Images", "image list", self.timeout)
+
+        return "\n".join(sections)
+
+    def get_crash_summary(self) -> Dict[str, Any]:
+        """Return a structured crash summary.
+
+        Keys in the returned dict:
+
+        * ``signal``        — crash description string
+        * ``crash_frame``   — raw frame info lines
+        * ``backtrace``     — list of backtrace lines (crashing thread)
+        * ``threads``       — raw all-thread backtraces
+        * ``registers``     — dict mapping register name → value
+        """
+        summary: Dict[str, Any] = {
+            "signal": None,
+            "crash_frame": [],
+            "backtrace": [],
+            "threads": [],
+            "registers": {},
+        }
+
+        try:
+            summary["signal"] = "\n".join(
+                self.send_command("process status", timeout=10)
+            )
+        except LLDBError:
+            pass
+
+        try:
+            summary["crash_frame"] = self.send_command("frame info", timeout=10)
+        except LLDBError:
+            pass
+
+        try:
+            summary["backtrace"] = self.send_command("bt", timeout=self.timeout)
+        except LLDBError:
+            pass
+
+        try:
+            summary["threads"] = self.send_command("bt all", timeout=self.timeout)
+        except LLDBError:
+            pass
+
+        try:
+            reg_lines = self.send_command("register read", timeout=15)
+            for line in reg_lines:
+                # Lines look like: "       rax = 0x0000000000000000"
+                if "=" in line:
+                    parts = line.split("=", 1)
+                    name = parts[0].strip()
+                    val = parts[1].strip()
+                    if name:
+                        summary["registers"][name] = val
+        except LLDBError:
+            pass
+
+        return summary
+
+    def get_thread_backtraces(self, max_frames: int = 100) -> List[Dict[str, Any]]:
+        """Return per-thread backtraces as a list of structured dicts.
+
+        Each dict has ``id``, ``raw`` (backtrace text for that thread).
+        """
+        try:
+            raw = self.send_command("bt all", timeout=self.timeout)
+        except LLDBError as exc:
+            return [{"error": str(exc)}]
+
+        # Split the output into per-thread sections.
+        # LLDB bt all output starts thread sections with "* thread #N" or "  thread #N"
+        threads: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+        for line in raw:
+            if "thread #" in line.lower():
+                if current is not None:
+                    threads.append(current)
+                current = {"id": line.strip(), "raw": [line]}
+            elif current is not None:
+                current["raw"].append(line)
+        if current is not None:
+            threads.append(current)
+
+        if not threads:
+            threads = [{"id": "all", "raw": raw}]
+
+        for t in threads:
+            t["raw"] = "\n".join(t["raw"])
+
+        return threads
+
+    def get_frame_locals(self, frame_num: int = 0) -> Dict[str, Any]:
+        """Return local variables and arguments for *frame_num*."""
+        out: Dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
+        try:
+            self.send_command(f"frame select {frame_num}", timeout=10)
+            locals_out = self.send_command("frame variable", timeout=10)
+            args_out = self.send_command("frame variable --show-globals false", timeout=10)
+            raw_lines = (
+                self.send_command(f"frame info", timeout=10)
+                + locals_out
+                + args_out
+            )
+            out["raw"] = "\n".join(raw_lines)
+            out["locals"] = locals_out
+        except LLDBError as exc:
+            out["error"] = str(exc)
+        return out
+
+    def get_variable(self, expr: str) -> Optional[str]:
+        """Evaluate *expr* in the current frame. Returns the value string."""
+        try:
+            out = self.send_command(f"expression {expr}", timeout=10)
+            for line in out:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("error:"):
+                    return stripped
+        except LLDBError:
+            pass
+        # Fallback: try frame variable for simple names
+        try:
+            out = self.send_command(f"frame variable {expr}", timeout=10)
+            for line in out:
+                stripped = line.strip()
+                if stripped:
+                    return stripped
+        except LLDBError:
+            pass
+        return None
+
+    def inspect_memory(self, address: str, length: int = 64, unit: str = "b") -> str:
+        """Hex-dump *length* bytes at *address*.
+
+        ``unit`` is ignored (LLDB uses ``--size`` for element size);
+        ``length`` is the byte count.
+        """
+        out = self.send_command(
+            f"memory read --count {length} --format x {address}", timeout=15
+        )
+        return "\n".join(out)
+
+    def get_disassembly(
+        self,
+        location: Optional[str] = None,
+        n_instructions: int = 30,
+    ) -> str:
+        """Disassemble around the crash point (or *location*)."""
+        if location:
+            cmd = f"disassemble --name {location} --count {n_instructions}"
+        else:
+            cmd = f"disassemble --pc --count {n_instructions}"
+        try:
+            out = self.send_command(cmd, timeout=15)
+            return "\n".join(out)
+        except LLDBError as exc:
+            return f"disassembly failed: {exc}"
+
+    def get_all_registers(self) -> str:
+        """Return all register values (general + floating-point + special)."""
+        try:
+            out = self.send_command("register read --all", timeout=15)
+            return "\n".join(out)
+        except LLDBError:
+            pass
+        try:
+            out = self.send_command("register read", timeout=15)
+            return "\n".join(out)
+        except LLDBError as exc:
+            return f"register read failed: {exc}"
+
+    def get_mapped_memory(self) -> str:
+        """Return process memory map."""
+        try:
+            out = self.send_command("process status --verbose", timeout=15)
+            map_out = self.send_command("target modules list", timeout=15)
+            return "\n".join(out + [""] + map_out)
+        except LLDBError as exc:
+            return f"memory map failed: {exc}"
+
+    def get_inferior_info(self) -> str:
+        """Return binary/OS info about the inferior."""
+        lines: List[str] = []
+        for cmd in ("target list", "image list", "target modules dump symtab"):
+            try:
+                out = self.send_command(cmd, timeout=10)
+                if out:
+                    lines.extend(out)
+                    lines.append("")
+            except LLDBError:
+                pass
+        return "\n".join(lines)
 
     # -- LLDB-specific helpers ----------------------------------------------
 

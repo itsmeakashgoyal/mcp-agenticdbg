@@ -50,11 +50,10 @@ That means your assistant can move from "clever guesser" to "grounded debugger":
 | Platform | Debugger | Dump Types | Status |
 | --- | --- | --- | --- |
 | Windows | CDB / WinDbg | `.dmp` (minidump/full dump) | Supported |
-| Linux | GDB | `core`, `core.*`, `*.core` | In progress |
-| macOS | LLDB | `.crash`, `.ips`, core dumps | In progress |
+| Linux | GDB | `core`, `core.*`, `*.core` | Supported |
+| macOS | LLDB | core dumps (via `gen_core_mac.sh`) | Supported |
 
-Linux and macOS paths are implemented but still evolving. Treat them as in-progress compared with Windows.
-Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information
+Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information.
 
 ## Table of Contents
 
@@ -164,6 +163,11 @@ ulimit -c unlimited
 ```bash
 xcode-select --install
 ```
+
+> **Note:** On macOS 12+, `ulimit -c unlimited` alone does not reliably produce binary core
+> files — the system's `ReportCrash` agent intercepts fatal signals first. Use the included
+> `gen_core_mac.sh` script (see [Example Crash Programs](#example-crash-programs)) which runs
+> binaries under `lldb` and uses `process save-core` to write the core.
 
 ### MCP Client
 
@@ -359,7 +363,7 @@ CLI args override env vars.
 
 ## Example Crash Programs
 
-The `examples/` folder contains six C++ programs that intentionally crash. They work on all platforms.
+The `examples/` folder contains ten C++ programs that intentionally crash. They work on all platforms.
 
 | Example | Crash Type |
 |---|---|
@@ -369,6 +373,10 @@ The `examples/` folder contains six C++ programs that intentionally crash. They 
 | `vtable-corruption.cpp` | Virtual call on a deleted object |
 | `stack-buffer-overrun.cpp` | Stack buffer overflow |
 | `heap-corruption.cpp` | Write past heap allocation boundary |
+| `deep-callchain-nullptr.cpp` | Null dereference 12+ frames deep in a recursive evaluator |
+| `heap-metadata-corruption.cpp` | Off-by-one corrupts heap metadata; crash inside `free()` |
+| `multi-inheritance-crash.cpp` | Wrong C-style cast across multiple inheritance → vtable crash |
+| `thread-uaf.cpp` | Multi-threaded use-after-free: two threads race on the same object |
 
 ### Build & Run
 
@@ -378,11 +386,31 @@ cd examples && .\build.ps1
 
 # Linux / macOS
 cd examples && chmod +x build.sh && ./build.sh
-
-# Run (Linux/macOS -- enable core dumps first)
-ulimit -c unlimited
-./build/out/stack-overflow
 ```
+
+#### Linux — generate a core dump
+
+```bash
+ulimit -c unlimited
+./build/out/use-after-free    # crash → core file in current dir or /var/crash/
+```
+
+#### macOS — generate a core dump
+
+On macOS 12+, running the binary directly sends crashes to `~/Library/Logs/DiagnosticReports/`
+instead of a binary core file. Use `gen_core_mac.sh` instead:
+
+```bash
+cd examples
+chmod +x gen_core_mac.sh
+./gen_core_mac.sh use-after-free        # core → build/out/core.use-after-free
+./gen_core_mac.sh stack-overflow        # core → build/out/core.stack-overflow
+```
+
+#### Windows — dumps are automatic
+
+Running the examples under Windows writes `.dmp` files to `build\out\dumps\` via the
+`crashdump.h` MiniDump handler (no extra setup required).
 
 Then ask TriagePilot to analyze the resulting dump.
 
@@ -419,22 +447,37 @@ Increase timeout (often needed for first-time symbol downloads):
 triagepilot --timeout 120
 ```
 
-### No core dumps on Linux/macOS
+### No core dumps on Linux
 
 ```bash
 ulimit -c unlimited
-cat /proc/sys/kernel/core_pattern    # Linux
-ls /cores/                           # macOS
+cat /proc/sys/kernel/core_pattern
 ```
 
-On macOS, you may also need one-time system setup:
+If `core_pattern` points to a crash reporter (e.g. Ubuntu's `apport`), cores go to
+`/var/crash/`. Disable apport or adjust the pattern:
 
 ```bash
-launchctl limit core unlimited unlimited
-sudo mkdir -p /cores
-sudo chmod 1777 /cores
-sysctl kern.coredump kern.corefile
+echo "core" | sudo tee /proc/sys/kernel/core_pattern
 ```
+
+### No core dumps on macOS
+
+On macOS 12+, `ulimit -c unlimited` is not enough — the system's `ReportCrash` agent
+intercepts fatal signals before the kernel writes to `/cores`. Crashes land in
+`~/Library/Logs/DiagnosticReports/` as `.crash` / `.ips` reports, not binary core files.
+
+Use the included `gen_core_mac.sh` script, which runs the binary under `lldb` and saves
+the core with `process save-core`:
+
+```bash
+cd examples
+./gen_core_mac.sh use-after-free       # writes build/out/core.use-after-free
+./gen_core_mac.sh stack-overflow /tmp/stack.core   # custom output path
+```
+
+This approach works on all macOS versions without requiring `/cores` to be writable or
+disabling SIP.
 
 ### Symbols not resolving on Windows
 
