@@ -1,7 +1,7 @@
 name: DCO
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [master]
 
 permissions:
@@ -11,12 +11,18 @@ permissions:
 jobs:
   dco:
     name: DCO Sign-Off Check
+    if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Fetch base branch
+        run: |
+          git remote add upstream https://github.com/${{ github.repository }}.git
+          git fetch upstream ${{ github.event.pull_request.base.ref }} --depth=1
       - name: Check DCO sign-off
         run: |
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
