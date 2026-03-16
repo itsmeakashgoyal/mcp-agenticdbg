@@ -825,6 +825,9 @@ async def handle_analyze_dump(
     timeout: int,
     verbose: bool,
     AnalyzeDumpParams,
+    memory_store=None,
+    memory_auto_recall: bool = True,
+    memory_auto_save: bool = True,
 ) -> list[TextContent]:
     if "dump_path" not in arguments or not arguments.get("dump_path"):
         return [
@@ -834,7 +837,7 @@ async def handle_analyze_dump(
         ]
 
     args = AnalyzeDumpParams(**arguments)
-    return await _run_dump_analysis(
+    results = await _run_dump_analysis(
         args,
         cdb_path=cdb_path,
         debugger_path=debugger_path,
@@ -845,6 +848,40 @@ async def handle_analyze_dump(
         timeout=timeout,
         verbose=verbose,
     )
+
+    # Memory integration: auto-recall and auto-save
+    if memory_store is not None:
+        try:
+            from ..memory.tools import auto_recall_similar, auto_save_analysis
+
+            full_text = "".join(r.text for r in results)
+
+            # Auto-recall: prepend similar past crashes
+            if memory_auto_recall:
+                recall_section = auto_recall_similar(memory_store, full_text, limit=3)
+                if recall_section:
+                    results.insert(0, TextContent(type="text", text=recall_section))
+
+            # Auto-save: store this analysis for future recall
+            if memory_auto_save:
+                import sys
+
+                platform = (
+                    "windows" if sys.platform == "win32"
+                    else "macos" if sys.platform == "darwin"
+                    else "linux"
+                )
+                auto_save_analysis(
+                    memory_store,
+                    dump_path=args.dump_path,
+                    analysis_text=full_text,
+                    debugger_type=debugger_type,
+                    platform=platform,
+                )
+        except Exception:
+            logger.warning("Memory integration failed during analyze_dump", exc_info=True)
+
+    return results
 
 
 async def handle_open_dump(

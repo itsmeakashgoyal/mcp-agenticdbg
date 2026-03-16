@@ -51,6 +51,12 @@ MCP Protocol (stdio)
          │    ├── cdb.py      # Windows CDB/WinDbg
          │    ├── gdb.py      # Linux GDB (dual-mode: MI + CLI fallback)
          │    └── lldb.py     # macOS LLDB
+         ├── memory/          # Persistent crash triage knowledge base
+         │    ├── models.py   # Pydantic models (TriageMemoryEntry, tool params)
+         │    ├── store.py    # SQLite-backed MemoryStore (CRUD, decay, pruning)
+         │    ├── similarity.py # TF-IDF scoring, multi-tier crash matching
+         │    ├── signature.py  # Crash signature extraction, stack hashing
+         │    └── tools.py    # MCP tool handlers + auto-save/recall helpers
          ├── config.py        # pydantic-settings, TRIAGEPILOT_* env vars
          └── graph/           # Optional LangGraph autonomous triage workflow
 ```
@@ -79,6 +85,23 @@ MCP Protocol (stdio)
 | `create_repo_pr` | Create GitHub PR with fix |
 | `create_shared_patch` | Create markdown patch for gitignored components |
 | `auto_triage_dump` | Autonomous triage via LangGraph (optional) |
+| `recall_similar_crashes` | Search memory for similar past crash analyses |
+| `save_triage_result` | Save root cause and fix to memory |
+| `list_known_patterns` | Browse stored crash patterns |
+| `forget_pattern` | Delete a memory entry by ID |
+
+### Persistent Memory System
+
+The `memory/` package provides a SQLite-backed knowledge base that learns from crash triage sessions. Key features:
+
+- **Auto-save:** Every `analyze_dump` call automatically stores the crash signature, stack hash, and analysis tokens
+- **Auto-recall:** On new analyses, similar past crashes are surfaced before the main results
+- **Three-tier similarity:** Crash signature match (50%), stack hash match (30%), TF-IDF keyword similarity (20%)
+- **Confidence decay:** Old memories decay with a configurable half-life (default 90 days); confirmed fixes boost confidence
+- **Auto-tagging:** Crash type, module, language, and category tags are extracted automatically
+- **LangGraph integration:** `memory_recall_node` feeds past cases into LLM root cause analysis; `memory_save_node` persists completed triages
+
+Data stored at `~/.triagepilot/memory.db` by default.
 
 ### Configuration
 
@@ -88,6 +111,8 @@ All settings configurable via environment variables (`TRIAGEPILOT_` prefix) or C
 - `symbols_path`, `image_path`, `repo_path`
 - `session_timeout`, `max_sessions`
 - `llm_model`, `llm_api_key` (for LangGraph mode)
+- `memory_enabled`, `memory_db_path`, `memory_max_entries`, `memory_confidence_half_life_days`
+- `memory_auto_recall`, `memory_auto_save`
 
 ### Prompt Template
 

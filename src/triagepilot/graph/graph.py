@@ -13,6 +13,8 @@ from .nodes import (
     classify_changes_node,
     create_pr_node,
     extract_metadata_node,
+    memory_recall_node,
+    memory_save_node,
     root_cause_node,
     shared_patch_node,
     source_lookup_node,
@@ -60,10 +62,12 @@ def build_crash_analysis_graph(*, include_llm_nodes: bool = True):
     builder.add_node("analyze_dump", analyze_dump_node)
     builder.add_node("extract_metadata", extract_metadata_node)
     builder.add_node("source_lookup", source_lookup_node)
+    builder.add_node("memory_recall", memory_recall_node)
     builder.add_node("classify_changes", classify_changes_node)
     builder.add_node("create_pr", create_pr_node)
     builder.add_node("shared_patch", shared_patch_node)
     builder.add_node("summary", summary_node)
+    builder.add_node("memory_save", memory_save_node)
 
     if include_llm_nodes:
         builder.add_node("root_cause", root_cause_node)
@@ -84,17 +88,18 @@ def build_crash_analysis_graph(*, include_llm_nodes: bool = True):
         },
     )
 
-    # extract_metadata -> source_lookup
+    # extract_metadata -> source_lookup -> memory_recall
     builder.add_edge("extract_metadata", "source_lookup")
+    builder.add_edge("source_lookup", "memory_recall")
 
     if include_llm_nodes:
-        # source_lookup -> root_cause -> suggest_fix -> classify_changes
-        builder.add_edge("source_lookup", "root_cause")
+        # memory_recall -> root_cause -> suggest_fix -> classify_changes
+        builder.add_edge("memory_recall", "root_cause")
         builder.add_edge("root_cause", "suggest_fix")
         builder.add_edge("suggest_fix", "classify_changes")
     else:
         # Skip LLM nodes
-        builder.add_edge("source_lookup", "classify_changes")
+        builder.add_edge("memory_recall", "classify_changes")
 
     # classify_changes -> route to output node
     builder.add_conditional_edges(
@@ -108,11 +113,10 @@ def build_crash_analysis_graph(*, include_llm_nodes: bool = True):
         },
     )
 
-    # Output nodes -> summary
+    # Output nodes -> summary -> memory_save -> END
     builder.add_edge("create_pr", "summary")
     builder.add_edge("shared_patch", "summary")
-
-    # summary -> END
-    builder.add_edge("summary", END)
+    builder.add_edge("summary", "memory_save")
+    builder.add_edge("memory_save", END)
 
     return builder.compile()

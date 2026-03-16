@@ -29,6 +29,14 @@ class ServerConfig(BaseSettings):
     # Session pool
     max_concurrent_sessions: int = 5
 
+    # Persistent memory system
+    memory_enabled: bool = True
+    memory_db_path: str | None = None  # default: ~/.triagepilot/memory.db
+    memory_max_entries: int = 10000
+    memory_confidence_half_life_days: float = 90.0
+    memory_auto_recall: bool = True
+    memory_auto_save: bool = True
+
     @property
     def effective_debugger_path(self) -> str | None:
         """Return ``debugger_path`` if set, otherwise fall back to ``cdb_path``."""

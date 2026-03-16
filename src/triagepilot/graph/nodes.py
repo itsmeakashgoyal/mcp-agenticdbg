@@ -153,6 +153,21 @@ def root_cause_node(state: dict) -> dict:
         llm = _get_llm(state)
 
         context_parts = []
+
+        # Include similar past cases from memory if available
+        similar_cases = state.get("similar_cases")
+        if similar_cases:
+            memory_ctx = "## Similar Past Crashes (from memory)\n"
+            for i, case in enumerate(similar_cases, 1):
+                memory_ctx += f"\n### Past Case {i} (similarity: {case.get('similarity_score', 0):.0%})\n"
+                if case.get("root_cause"):
+                    memory_ctx += f"- **Root Cause:** {case['root_cause']}\n"
+                if case.get("fix_description"):
+                    memory_ctx += f"- **Fix:** {case['fix_description']}\n"
+                if case.get("match_reasons"):
+                    memory_ctx += f"- **Match reason:** {'; '.join(case['match_reasons'])}\n"
+            context_parts.append(memory_ctx)
+
         if state.get("crash_info"):
             context_parts.append(f"## Crash Event\n{state['crash_info']}")
         if state.get("analyze_output"):
@@ -336,3 +351,95 @@ def summary_node(state: dict) -> dict:
 
     report = "\n".join(sections)
     return {"report": report, "status": "done"}
+
+
+# ---------------------------------------------------------------------------
+# Memory nodes (optional — only used when memory system is available)
+# ---------------------------------------------------------------------------
+
+
+def memory_recall_node(state: dict) -> dict:
+    """Query persistent memory for similar past crashes."""
+    memory_db_path = state.get("memory_db_path")
+    analyze_output = state.get("analyze_output", "")
+
+    if not memory_db_path or not analyze_output:
+        return {"similar_cases": None}
+
+    try:
+        from ..memory import MemoryStore, extract_crash_signature, compute_stack_hash, tokenize_for_search
+
+        store = MemoryStore(db_path=memory_db_path)
+        sig = extract_crash_signature(analyze_output)
+        stack_hash = compute_stack_hash(analyze_output)
+        tokens = tokenize_for_search(analyze_output, sig.faulting_file)
+
+        results = store.recall(
+            query_signature=sig.normalized(),
+            query_stack_hash=stack_hash,
+            query_tokens=tokens,
+            limit=3,
+        )
+        store.close()
+
+        if not results:
+            return {"similar_cases": None}
+
+        cases = []
+        for r in results:
+            cases.append({
+                "signature": r.entry.crash_signature,
+                "root_cause": r.entry.root_cause,
+                "fix_description": r.entry.fix_description,
+                "fix_pr_url": r.entry.fix_pr_url,
+                "similarity_score": r.similarity_score,
+                "match_reasons": r.match_reasons,
+                "useful_commands": r.entry.debugger_commands_used,
+            })
+
+        logger.info("memory_recall_node: found %d similar cases", len(cases))
+        return {"similar_cases": cases}
+    except Exception as exc:
+        logger.warning("memory_recall_node failed: %s", exc)
+        return {"similar_cases": None}
+
+
+def memory_save_node(state: dict) -> dict:
+    """Save completed triage results to persistent memory."""
+    memory_db_path = state.get("memory_db_path")
+    analyze_output = state.get("analyze_output", "")
+
+    if not memory_db_path or not analyze_output:
+        return {}
+
+    try:
+        from ..memory import auto_save_analysis, MemoryStore
+
+        store = MemoryStore(db_path=memory_db_path)
+
+        entry_id = auto_save_analysis(
+            store,
+            dump_path=state["dump_path"],
+            analysis_text=analyze_output,
+            debugger_type=state.get("debugger_type", "auto"),
+        )
+
+        # If we have root cause / fix info, update the entry
+        if entry_id and (state.get("root_cause") or state.get("suggested_fixes")):
+            updates = {}
+            if state.get("root_cause"):
+                updates["root_cause"] = state["root_cause"]
+            if state.get("pr_url"):
+                updates["fix_pr_url"] = state["pr_url"]
+            if state.get("suggested_fixes"):
+                fixes = state["suggested_fixes"]
+                if fixes and isinstance(fixes[0], dict):
+                    updates["fix_description"] = fixes[0].get("raw_suggestion", "")[:500]
+            store.update_entry(entry_id, **updates)
+
+        store.close()
+        logger.info("memory_save_node: saved triage for %s", state["dump_path"])
+    except Exception as exc:
+        logger.warning("memory_save_node failed: %s", exc)
+
+    return {}

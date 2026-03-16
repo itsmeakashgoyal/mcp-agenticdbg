@@ -43,6 +43,10 @@ class CrashAnalysisState(TypedDict, total=False):
     errors: list[str]
     status: Literal["analyzing", "diagnosing", "fixing", "reporting", "done", "error"]
 
+    # --- Memory system ---
+    similar_cases: list[dict] | None
+    memory_db_path: str | None
+
     # --- Server context (injected once, read-only) ---
     debugger_path: str | None
     debugger_type: str
