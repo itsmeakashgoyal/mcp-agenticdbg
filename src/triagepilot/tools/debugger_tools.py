@@ -100,6 +100,8 @@ _cmd_rate_limiter = _TokenBucket(rate=10.0, capacity=20.0)
 
 active_sessions: OrderedDict[str, DebuggerSession] = OrderedDict()
 _max_concurrent_sessions: int = 5
+# Protects active_sessions against concurrent create/evict races
+_session_lock = threading.Lock()
 
 
 def set_max_concurrent_sessions(limit: int) -> None:
@@ -162,8 +164,16 @@ _SYMBOL_NAME_RE = re.compile(r"^SYMBOL_NAME:\s+(\w+)!([A-Za-z0-9_:~]+)", re.MULT
 _MODULE_NAME_RE = re.compile(r"^MODULE_NAME:\s+(\w+)", re.MULTILINE)
 _STACK_FRAME_RE = re.compile(r"(\w+)!([A-Za-z0-9_:~]+)\+0x[0-9a-fA-F]+")
 
-# GDB/LLDB-style stack frame: #0 0x... in function_name (...) at file.cpp:line
-_POSIX_FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-fA-F]+\s+in\s+)?(\S+)\s+\(.*?\)\s+(?:at|from)\s+(\S+?)(?::(\d+))?$", re.MULTILINE)
+# GDB/LLDB "at file.cpp:42" patterns in backtraces
+_GDB_AT_RE = re.compile(
+    r"\bat\s+([\w./\-\\]+\.(?:c|cpp|cc|cxx|h|hpp|hxx|inl|rs|go|py|m|mm|swift)):(\d+)",
+    re.MULTILINE,
+)
+# GDB "#N ... in func_name (" frame pattern
+_GDB_FRAME_FUNC_RE = re.compile(
+    r"^#\d+\s+(?:0x[0-9a-fA-F]+\s+in\s+)?([A-Za-z_][A-Za-z0-9_:<>~*]+)\s*\(",
+    re.MULTILINE,
+)
 
 
 def _parse_faulting_source(analysis_text: str) -> Tuple[Optional[str], Optional[int]]:
@@ -242,15 +252,62 @@ def _extract_stack_functions(analysis_text: str) -> List[Tuple[str, str]]:
     return results
 
 
+def _parse_gdb_source_locations(
+    analysis_text: str,
+) -> List[Tuple[str, int]]:
+    """Extract ``(file_path, line_number)`` pairs from GDB backtrace output.
+
+    GDB emits ``at src/crash.cpp:15`` on every frame that has debug info.
+    The first match is the innermost (crashing) frame — the most useful one.
+    Returns unique ``(path, line)`` pairs in frame order.
+    """
+    seen: set = set()
+    results: List[Tuple[str, int]] = []
+    for m in _GDB_AT_RE.finditer(analysis_text):
+        path, line_str = m.group(1), int(m.group(2))
+        key = (os.path.basename(path).lower(), line_str)
+        if key not in seen:
+            seen.add(key)
+            results.append((path, line_str))
+    return results
+
+
+def _extract_gdb_functions(analysis_text: str) -> List[str]:
+    """Extract function names from GDB ``#N ... in func_name (`` frames.
+
+    Strips C++ namespace prefixes (``foo::bar::Baz`` → ``Baz``).
+    Skips obvious runtime/libc frames (``__libc_start_main``, ``??``, etc.).
+    Returns unique names in stack order (frame 0 first).
+    """
+    _SKIP = frozenset({
+        "??", "__libc_start_main", "__GI___libc_start_main",
+        "_start", "__cxa_throw", "__cxa_allocate_exception",
+    })
+    seen: set = set()
+    results: List[str] = []
+    for m in _GDB_FRAME_FUNC_RE.finditer(analysis_text):
+        raw = m.group(1)
+        bare = raw.rsplit("::", 1)[-1] if "::" in raw else raw
+        if bare in _SKIP or bare.startswith("__"):
+            continue
+        if bare not in seen:
+            seen.add(bare)
+            results.append(bare)
+    return results
+
+
 def _find_file_in_repo(
     filename: str,
     repo_path: str,
     budget: Optional[Dict[str, float | int | bool]] = None,
 ) -> List[str]:
-    """Walk the repo to find files matching the given basename (ignores .gitignore)."""
+    """Walk the repo to find files matching the given basename (ignores .gitignore).
+
+    ``followlinks=False`` prevents symlinks from escaping the repo root.
+    """
     matches = []
     target = filename.lower()
-    for dirpath, dirnames, filenames in os.walk(repo_path):
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         _prune_dirs_for_lookup(dirnames)
         if _is_budget_exhausted(budget):
             logger.warning("Source lookup budget exhausted while searching for file %s", filename)
@@ -279,7 +336,7 @@ def _find_function_in_repo(
 
     matches: List[Tuple[str, int]] = []
 
-    for dirpath, dirnames, filenames in os.walk(repo_path):
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         _prune_dirs_for_lookup(dirnames)
         if _is_budget_exhausted(budget):
             logger.warning("Source lookup budget exhausted while searching for function %s", function_name)
@@ -374,13 +431,26 @@ def _format_function_matches(
 def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Optional[str]:
     """Locate faulting source code using a multi-level fallback chain.
 
-    1. **PDB/DWARF source info** -- uses ``FAULTING_SOURCE_FILE`` when present.
-    2. **Function-name search** -- extracts ``SYMBOL_NAME`` (e.g.
-       ``MyAppCore!ProcessTreeNode``) and greps source files in *repo_path*.
-    3. **Stack-trace search** -- walks every ``module!Function+0xOffset``
-       frame from the stack trace and searches for definitions.
+    Level 0 — **GDB/LLDB ``at file:line``** — extracts ``at src/foo.cpp:42``
+    patterns directly from GDB backtrace output.  This is the richest source
+    and is checked first because it avoids a full repo walk when file name
+    and line are already known.
 
-    Searches the entire repo tree including gitignored directories
+    Level 1 — **PDB/DWARF ``FAULTING_SOURCE_FILE``** — CDB/WinDbg structured
+    debug-info output (``!analyze -v``).
+
+    Level 2 — **CDB ``SYMBOL_NAME`` function search** — extracts the faulting
+    function from ``SYMBOL_NAME: module!Function+0xOffset`` and greps for
+    its definition across the repo.
+
+    Level 3a — **CDB stack-frame function search** — walks every
+    ``module!Function+0xOffset`` frame and searches for definitions.
+
+    Level 3b — **GDB frame function search** — walks every ``#N ... in func (``
+    frame from GDB output; used when Level 0 found no file matches and no CDB
+    frames were present.
+
+    All levels search the entire repo tree (including gitignored directories)
     so shared-component source is discoverable.
     """
     if not repo_path:
@@ -391,7 +461,26 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
         return None
     budget = _new_source_lookup_budget()
 
-    # ----- Level 1: source file + line number -----
+    # ----- Level 0: GDB/LLDB "at file.cpp:line" (highest fidelity) -----
+    gdb_locations = _parse_gdb_source_locations(analysis_text)
+    for gdb_path, gdb_line in gdb_locations:
+        if _is_budget_exhausted(budget):
+            break
+        filename = os.path.basename(gdb_path)
+        candidates = _find_file_in_repo(filename, repo_path, budget)
+        if candidates:
+            best = _best_match(gdb_path, candidates)
+            header = (
+                f"### Faulting Source Code\n"
+                f"- **Source:** `{gdb_path}` (from GDB debug info)\n"
+                f"- **Local path:** `{best}`\n"
+                f"- **Faulting line:** {gdb_line}\n"
+            )
+            snippet = _read_source_context(best, gdb_line)
+            return header + f"\n```cpp\n{snippet}\n```\n\n"
+        logger.debug("Level 0: GDB file %s not found in repo", filename)
+
+    # ----- Level 1: PDB/DWARF FAULTING_SOURCE_FILE (CDB output) -----
     faulting_file, faulting_line = _parse_faulting_source(analysis_text)
     if faulting_file:
         filename = os.path.basename(faulting_file)
@@ -408,24 +497,34 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
                 snippet = _read_source_context(best, faulting_line)
                 return header + f"\n```cpp\n{snippet}\n```\n\n"
             return header + "\n"
-        logger.info("Source file %s not found in repo, trying function search", filename)
+        logger.info("Level 1: source file %s not found in repo", filename)
 
-    # ----- Level 2: SYMBOL_NAME function search -----
+    # ----- Level 2: CDB SYMBOL_NAME function search -----
     module_name, function_name = _parse_faulting_module_function(analysis_text)
     if function_name:
-        logger.info("Fallback: searching for function %s (module %s)", function_name, module_name)
+        logger.info("Level 2: searching for function %s (module %s)", function_name, module_name)
         matches = _find_function_in_repo(function_name, repo_path, module_name, budget)
         if matches:
             return _format_function_matches(matches, module_name, function_name, "Symbol Name Search")
 
-    # ----- Level 3: Stack-trace function search -----
+    # ----- Level 3a: CDB module!Function stack-frame search -----
     stack_functions = _extract_stack_functions(analysis_text)
     for frame_module, frame_func in stack_functions:
+        if _is_budget_exhausted(budget):
+            break
         matches = _find_function_in_repo(frame_func, repo_path, frame_module, budget)
         if matches:
             return _format_function_matches(matches, frame_module, frame_func, "Stack Trace Search")
-        if _is_budget_exhausted(budget):
-            break
+
+    # ----- Level 3b: GDB frame function search -----
+    if not _is_budget_exhausted(budget):
+        gdb_functions = _extract_gdb_functions(analysis_text)
+        for func_name in gdb_functions:
+            if _is_budget_exhausted(budget):
+                break
+            matches = _find_function_in_repo(func_name, repo_path, None, budget)
+            if matches:
+                return _format_function_matches(matches, None, func_name, "GDB Frame Search")
 
     # ----- Nothing found -----
     if bool(budget.get("stopped")):
@@ -438,13 +537,18 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
             f"- File budget: `{_SOURCE_LOOKUP_MAX_FILES}`\n\n"
             f"Try narrowing `repo_path` to the most relevant module subtree.\n"
         )
-    if function_name or faulting_file:
+    # gdb_functions is only defined when Level 3b ran (budget not exhausted then)
+    _gdb_funcs_found = (not _is_budget_exhausted(budget)) and bool(
+        locals().get("gdb_functions")
+    )
+    if function_name or faulting_file or gdb_locations or _gdb_funcs_found:
+        first_gdb = gdb_locations[0][0] if gdb_locations else None
         return (
             f"### Faulting Source Code\n"
             f"Could not locate source in `{repo_path}`.\n"
             f"- Module: `{module_name or 'Unknown'}`\n"
             f"- Function: `{function_name or 'Unknown'}`\n"
-            f"- Build path: `{faulting_file or 'N/A'}`\n\n"
+            f"- Build path: `{faulting_file or first_gdb or 'N/A'}`\n\n"
         )
     return None
 
@@ -455,10 +559,15 @@ def locate_faulting_source(analysis_text: str, repo_path: Optional[str]) -> Opti
 
 
 def _evict_lru_session() -> None:
+    """Evict the least-recently-used session.  Caller must hold ``_session_lock``."""
     if not active_sessions:
         return
     oldest_id, oldest_session = next(iter(active_sessions.items()))
-    logger.info("Evicting LRU session %s (pool limit %d reached)", oldest_id, _max_concurrent_sessions)
+    logger.info(
+        "Evicting LRU session %s (pool limit %d reached)",
+        oldest_id,
+        _max_concurrent_sessions,
+    )
     try:
         if oldest_session is not None:
             oldest_session.shutdown()
@@ -483,51 +592,57 @@ def get_or_create_session(
 
     Enforces ``_max_concurrent_sessions``: if the limit is reached the
     least-recently-used session is evicted.
+
+    The entire check-and-create sequence is serialised by ``_session_lock``
+    to prevent two concurrent callers from both determining a session is
+    missing and both attempting to create it.
     """
     if not dump_path:
         raise ValueError("dump_path must be provided")
 
     session_id = os.path.abspath(dump_path)
-
     effective_debugger_path = debugger_path or cdb_path
 
-    existing = active_sessions.get(session_id)
-    config_mismatch = existing is not None and (
-        (existing.symbols_path or "") != (symbols_path or "")
-        or (existing.image_path or "") != (image_path or "")
-    )
+    with _session_lock:
+        existing = active_sessions.get(session_id)
+        config_mismatch = existing is not None and (
+            (existing.symbols_path or "") != (symbols_path or "")
+            or (existing.image_path or "") != (image_path or "")
+        )
 
-    if config_mismatch and replace_if_config_mismatch:
-        try:
-            existing.shutdown()
-        except Exception:
-            pass
-        finally:
-            active_sessions[session_id] = None
+        if config_mismatch and replace_if_config_mismatch:
+            try:
+                existing.shutdown()
+            except Exception:
+                pass
+            finally:
+                active_sessions[session_id] = None
 
-    if session_id not in active_sessions or active_sessions[session_id] is None:
-        while active_session_count() >= _max_concurrent_sessions:
-            _evict_lru_session()
+        if session_id not in active_sessions or active_sessions[session_id] is None:
+            while active_session_count() >= _max_concurrent_sessions:
+                _evict_lru_session()
 
-        try:
-            session = create_session(
-                dump_path=dump_path,
-                debugger_path=effective_debugger_path,
-                symbols_path=symbols_path,
-                image_path=image_path,
-                timeout=timeout,
-                verbose=verbose,
-                debugger_type=debugger_type,
-            )
-            active_sessions[session_id] = session
-        except Exception as e:
-            raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to create session: {e}"))
-    elif config_mismatch and not replace_if_config_mismatch:
-        pass
-    else:
-        active_sessions.move_to_end(session_id)
+            try:
+                session = create_session(
+                    dump_path=dump_path,
+                    debugger_path=effective_debugger_path,
+                    symbols_path=symbols_path,
+                    image_path=image_path,
+                    timeout=timeout,
+                    verbose=verbose,
+                    debugger_type=debugger_type,
+                )
+                active_sessions[session_id] = session
+            except Exception as e:
+                raise McpError(
+                    ErrorData(code=INTERNAL_ERROR, message=f"Failed to create session: {e}")
+                )
+        elif config_mismatch and not replace_if_config_mismatch:
+            pass  # return existing session even though config differs
+        else:
+            active_sessions.move_to_end(session_id)
 
-    return active_sessions[session_id]
+        return active_sessions[session_id]
 
 
 def close_session(dump_path: str) -> bool:
@@ -536,14 +651,15 @@ def close_session(dump_path: str) -> bool:
 
     session_id = os.path.abspath(dump_path)
 
-    if session_id in active_sessions and active_sessions[session_id] is not None:
-        try:
-            active_sessions[session_id].shutdown()
-        except Exception:
-            pass
-        finally:
-            del active_sessions[session_id]
-        return True
+    with _session_lock:
+        if session_id in active_sessions and active_sessions[session_id] is not None:
+            try:
+                active_sessions[session_id].shutdown()
+            except Exception:
+                pass
+            finally:
+                del active_sessions[session_id]
+            return True
     return False
 
 
