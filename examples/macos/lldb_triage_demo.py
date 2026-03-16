@@ -4,22 +4,17 @@ Demonstration of LLDB-backed crash dump triage on macOS (or Linux with LLDB).
 
 Usage:
     # Generate a core dump first (see below), then:
-    python examples/lldb_triage_demo.py examples/build/out/core.use-after-free \
-        --image examples/build/out/use-after-free
+    cd examples/macos
+    python lldb_triage_demo.py build/out/core.use-after-free \
+        --image build/out/use-after-free
 
 Generating a core dump on macOS:
     # Use gen_core_mac.sh — direct execution sends crashes to DiagnosticReports,
     # not a binary core file, on macOS 12+.
-    cd examples
-    ./gen_core_mac.sh use-after-free          # → build/out/core.use-after-free
+    cd examples/macos
+    ./gen_core_mac.sh use-after-free          # -> build/out/core.use-after-free
     python lldb_triage_demo.py build/out/core.use-after-free \
         --image build/out/use-after-free
-
-Generating a core dump on Linux:
-    ulimit -c unlimited
-    ./examples/build/out/use-after-free       # crashes → core or core.<pid>
-    python examples/lldb_triage_demo.py core.<pid> \
-        --image examples/build/out/use-after-free
 """
 
 import argparse
@@ -27,7 +22,7 @@ import os
 import sys
 
 # Allow running from the repo root without installing the package.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from triagepilot.backends.lldb import LLDBSession, LLDBError
 

@@ -31,8 +31,9 @@ pytest src/triagepilot/tests/test_backends.py  # Single test file
 
 ### Building Example Crash Programs
 ```bash
-cd examples && bash build.sh             # Linux/macOS
-cd examples && ./build.ps1               # Windows (MSVC/Clang)
+cd examples/linux && bash build.sh       # Linux
+cd examples/macos && bash build.sh       # macOS
+cd examples\windows && .\build.ps1       # Windows (MSVC)
 ```
 
 ## Architecture

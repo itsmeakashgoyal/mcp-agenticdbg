@@ -8,7 +8,7 @@
 # modern macOS.
 #
 # Usage:
-#   cd examples
+#   cd examples/macos
 #   chmod +x gen_core_mac.sh
 #   ./gen_core_mac.sh [example-name] [output-core-path]
 #
@@ -20,7 +20,8 @@
 
 set -euo pipefail
 
-OUTDIR="build/out"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUTDIR="$SCRIPT_DIR/build/out"
 EXAMPLE="${1:-use-after-free}"
 BIN="$OUTDIR/$EXAMPLE"
 CORE="${2:-$OUTDIR/core.$EXAMPLE}"
@@ -63,8 +64,8 @@ if [[ -f "$CORE" ]]; then
     echo ""
     echo "Core dump written to: $CORE"
     echo ""
-    echo "Analyze with triagepilot:"
-    echo "  python examples/lldb_triage_demo.py $CORE --image $(pwd)/$BIN"
+    echo "Analyze with the triage demo:"
+    echo "  python lldb_triage_demo.py $CORE --image $BIN"
     echo ""
     echo "Or via MCP tools:"
     echo "  analyze_dump $CORE"
