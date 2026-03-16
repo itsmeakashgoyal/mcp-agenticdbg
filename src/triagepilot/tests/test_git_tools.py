@@ -1,23 +1,22 @@
 """Tests for git/PR tool helpers."""
 
-import os
 import pytest
 
+from triagepilot.server import CreateRepoPrParams
 from triagepilot.tools.git_tools import (
-    _validate_branch_name,
-    _normalize_rel_path,
-    _is_path_in_prefixes,
-    _filter_shared_paths,
     _filter_committable_paths,
+    _filter_shared_paths,
+    _is_path_in_prefixes,
+    _normalize_rel_path,
     _parse_porcelain_path,
     _resolve_pr_body,
+    _validate_branch_name,
 )
-from triagepilot.server import CreateRepoPrParams
-
 
 # ---------------------------------------------------------------------------
 # _validate_branch_name
 # ---------------------------------------------------------------------------
+
 
 class TestValidateBranchName:
     def test_valid(self):
@@ -47,6 +46,7 @@ class TestValidateBranchName:
 # _normalize_rel_path
 # ---------------------------------------------------------------------------
 
+
 class TestNormalizeRelPath:
     def test_backslash(self):
         assert _normalize_rel_path("src\\main.cpp") == "src/main.cpp"
@@ -61,6 +61,7 @@ class TestNormalizeRelPath:
 # ---------------------------------------------------------------------------
 # _is_path_in_prefixes
 # ---------------------------------------------------------------------------
+
 
 class TestIsPathInPrefixes:
     def test_exact_match(self):
@@ -80,6 +81,7 @@ class TestIsPathInPrefixes:
 # _filter_shared_paths
 # ---------------------------------------------------------------------------
 
+
 class TestFilterSharedPaths:
     def test_matches(self):
         paths = ["vendor/libs/core/a.cpp", "src/b.cpp"]
@@ -93,6 +95,7 @@ class TestFilterSharedPaths:
 # ---------------------------------------------------------------------------
 # _filter_committable_paths
 # ---------------------------------------------------------------------------
+
 
 class TestFilterCommittablePaths:
     def test_excludes_shared_and_submodule(self):
@@ -109,6 +112,7 @@ class TestFilterCommittablePaths:
 # ---------------------------------------------------------------------------
 # _parse_porcelain_path
 # ---------------------------------------------------------------------------
+
 
 class TestParsePorcelainPath:
     def test_modified(self):
@@ -127,6 +131,7 @@ class TestParsePorcelainPath:
 # ---------------------------------------------------------------------------
 # _resolve_pr_body
 # ---------------------------------------------------------------------------
+
 
 class TestResolvePrBody:
     def test_populates_sections(self, tmp_path):

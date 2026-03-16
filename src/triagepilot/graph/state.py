@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TypedDict
+from typing import Literal, TypedDict
 
 
 class CrashAnalysisState(TypedDict, total=False):
@@ -14,29 +14,29 @@ class CrashAnalysisState(TypedDict, total=False):
 
     # --- Inputs (set at graph invocation) ---
     dump_path: str
-    symbols_path: Optional[str]
-    image_path: Optional[str]
-    repo_path: Optional[str]
-    jira_id: Optional[str]
+    symbols_path: str | None
+    image_path: str | None
+    repo_path: str | None
+    jira_id: str | None
 
     # --- Debugger analysis results ---
-    crash_info: Optional[str]
-    analyze_output: Optional[str]
-    stack_trace: Optional[str]
-    modules: Optional[str]
-    threads: Optional[str]
-    faulting_source: Optional[str]
-    metadata: Optional[dict]
+    crash_info: str | None
+    analyze_output: str | None
+    stack_trace: str | None
+    modules: str | None
+    threads: str | None
+    faulting_source: str | None
+    metadata: dict | None
 
     # --- LLM-generated outputs ---
-    root_cause: Optional[str]
-    suggested_fixes: Optional[list[dict]]
-    report: Optional[str]
+    root_cause: str | None
+    suggested_fixes: list[dict] | None
+    report: str | None
 
     # --- Routing decisions ---
-    change_type: Optional[Literal["shared", "repo", "mixed", "none"]]
-    pr_url: Optional[str]
-    patch_path: Optional[str]
+    change_type: Literal["shared", "repo", "mixed", "none"] | None
+    pr_url: str | None
+    patch_path: str | None
 
     # --- Control flow ---
     retry_count: int
@@ -44,11 +44,11 @@ class CrashAnalysisState(TypedDict, total=False):
     status: Literal["analyzing", "diagnosing", "fixing", "reporting", "done", "error"]
 
     # --- Server context (injected once, read-only) ---
-    debugger_path: Optional[str]
+    debugger_path: str | None
     debugger_type: str
     timeout: int
     verbose: bool
     max_retries: int
-    llm_provider: Optional[str]
-    llm_model: Optional[str]
-    llm_api_key: Optional[str]
+    llm_provider: str | None
+    llm_model: str | None
+    llm_api_key: str | None

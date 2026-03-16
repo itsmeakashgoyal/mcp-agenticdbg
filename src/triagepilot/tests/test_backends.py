@@ -1,24 +1,23 @@
 """Tests for the backends package (factory, detection, base class)."""
 
 import sys
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from triagepilot.backends import (
     DebuggerError,
-    DebuggerSession,
-    detect_debugger_type,
     _get_backend_class,
+    detect_debugger_type,
 )
-from triagepilot.backends.base import DebuggerSession as BaseSession
-from triagepilot.backends.cdb import CDBSession, CDBError
-from triagepilot.backends.lldb import LLDBSession, LLDBError
-from triagepilot.backends.gdb import GDBSession, GDBError
-
+from triagepilot.backends.cdb import CDBError, CDBSession
+from triagepilot.backends.gdb import GDBError, GDBSession
+from triagepilot.backends.lldb import LLDBError, LLDBSession
 
 # ---------------------------------------------------------------------------
 # detect_debugger_type
 # ---------------------------------------------------------------------------
+
 
 class TestDetectDebuggerType:
     def test_windows(self):
@@ -30,24 +29,28 @@ class TestDetectDebuggerType:
             assert detect_debugger_type() == "lldb"
 
     def test_linux_gdb_available(self):
-        with patch.object(sys, "platform", "linux"), \
-             patch("shutil.which", side_effect=lambda x: "/usr/bin/gdb" if x == "gdb" else None):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", side_effect=lambda x: "/usr/bin/gdb" if x == "gdb" else None),
+        ):
             assert detect_debugger_type() == "gdb"
 
     def test_linux_lldb_fallback(self):
-        with patch.object(sys, "platform", "linux"), \
-             patch("shutil.which", side_effect=lambda x: "/usr/bin/lldb" if x == "lldb" else None):
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch("shutil.which", side_effect=lambda x: "/usr/bin/lldb" if x == "lldb" else None),
+        ):
             assert detect_debugger_type() == "lldb"
 
     def test_linux_neither(self):
-        with patch.object(sys, "platform", "linux"), \
-             patch("shutil.which", return_value=None):
+        with patch.object(sys, "platform", "linux"), patch("shutil.which", return_value=None):
             assert detect_debugger_type() == "gdb"
 
 
 # ---------------------------------------------------------------------------
 # _get_backend_class
 # ---------------------------------------------------------------------------
+
 
 class TestGetBackendClass:
     def test_cdb(self):
@@ -68,6 +71,7 @@ class TestGetBackendClass:
 # Error hierarchy
 # ---------------------------------------------------------------------------
 
+
 class TestErrorHierarchy:
     def test_cdb_error_is_debugger_error(self):
         assert issubclass(CDBError, DebuggerError)
@@ -82,6 +86,7 @@ class TestErrorHierarchy:
 # ---------------------------------------------------------------------------
 # Backend names
 # ---------------------------------------------------------------------------
+
 
 class TestBackendNames:
     def test_cdb_name(self):
@@ -98,6 +103,7 @@ class TestBackendNames:
 # Init validation (shared across backends)
 # ---------------------------------------------------------------------------
 
+
 class TestInitValidation:
     @pytest.mark.parametrize("cls", [CDBSession, LLDBSession, GDBSession])
     def test_no_target_raises(self, cls):
@@ -113,6 +119,7 @@ class TestInitValidation:
 # ---------------------------------------------------------------------------
 # get_local_dumps_path
 # ---------------------------------------------------------------------------
+
 
 class TestGetLocalDumpsPath:
     def test_cdb_returns_string_or_none(self):

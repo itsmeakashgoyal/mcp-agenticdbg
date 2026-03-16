@@ -24,7 +24,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .base import DebuggerError, DebuggerSession
 
@@ -113,7 +113,7 @@ class MIParser:
     # ------------------------------------------------------------------
 
     @classmethod
-    def parse(cls, results_str: str) -> Dict[str, Any]:
+    def parse(cls, results_str: str) -> dict[str, Any]:
         """Parse a comma-separated result-list string into a dict.
 
         ``results_str`` is the text that follows the leading comma in a
@@ -132,7 +132,7 @@ class MIParser:
             return {}
 
     @classmethod
-    def parse_result_record(cls, line: str) -> Optional[Dict[str, Any]]:
+    def parse_result_record(cls, line: str) -> dict[str, Any] | None:
         """Parse a complete MI result-record line.
 
         Returns a dict with keys ``token``, ``class``, ``results``, or
@@ -151,7 +151,7 @@ class MIParser:
         }
 
     @classmethod
-    def parse_stream_record(cls, line: str) -> Optional[Tuple[str, str]]:
+    def parse_stream_record(cls, line: str) -> tuple[str, str] | None:
         """Parse a MI stream record line (``~``, ``@``, ``&``).
 
         Returns ``(kind, decoded_text)`` where *kind* is one of
@@ -174,9 +174,9 @@ class MIParser:
     # Grammar rules
     # ------------------------------------------------------------------
 
-    def _result_list(self) -> Dict[str, Any]:
+    def _result_list(self) -> dict[str, Any]:
         """result (',' result)*  →  dict"""
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         self._ws()
         if not self._ch() or self._ch() in "}]":
             return out
@@ -189,7 +189,7 @@ class MIParser:
             self._one_result(out)
         return out
 
-    def _one_result(self, out: Dict[str, Any]) -> None:
+    def _one_result(self, out: dict[str, Any]) -> None:
         """Parse ``name=value`` and merge into *out*."""
         name = self._name()
         self._eat("=")
@@ -230,10 +230,10 @@ class MIParser:
             self._i += 1
         return self._s[start : self._i].strip()
 
-    def _string(self) -> Tuple[str, int]:
+    def _string(self) -> tuple[str, int]:
         """Parse a C-style quoted string.  Returns (text, end_pos)."""
         self._eat('"')
-        parts: List[str] = []
+        parts: list[str] = []
         s = self._s
         i = self._i
         n = len(s)
@@ -262,9 +262,7 @@ class MIParser:
                     parts.append("\0")
                 elif e in ("x", "X"):
                     h = s[i : i + 2]
-                    if len(h) == 2 and all(
-                        c in "0123456789abcdefABCDEF" for c in h
-                    ):
+                    if len(h) == 2 and all(c in "0123456789abcdefABCDEF" for c in h):
                         parts.append(chr(int(h, 16)))
                         i += 2
                     else:
@@ -277,7 +275,7 @@ class MIParser:
         self._i = i
         return "".join(parts), i
 
-    def _tuple(self) -> Dict[str, Any]:
+    def _tuple(self) -> dict[str, Any]:
         """{} | { result (',' result)* }"""
         self._eat("{")
         self._ws()
@@ -289,7 +287,7 @@ class MIParser:
         self._eat("}")
         return out
 
-    def _list(self) -> List[Any]:
+    def _list(self) -> list[Any]:
         """[] | [value,...] | [result,...]"""
         self._eat("[")
         self._ws()
@@ -302,13 +300,13 @@ class MIParser:
         is_result_list = self._looks_like_result()
         self._i = saved
 
-        items: List[Any] = []
+        items: list[Any] = []
         while True:
             self._ws()
             if self._ch() == "]":
                 break
             if is_result_list:
-                item: Dict[str, Any] = {}
+                item: dict[str, Any] = {}
                 self._one_result(item)
                 items.append(item)
             else:
@@ -344,9 +342,7 @@ class MIParser:
     def _eat(self, c: str) -> None:
         if self._ch() != c:
             ctx = self._s[max(0, self._i - 10) : self._i + 10]
-            raise MIParseError(
-                f"Expected {c!r} at pos {self._i}, got {self._ch()!r}: …{ctx!r}…"
-            )
+            raise MIParseError(f"Expected {c!r} at pos {self._i}, got {self._ch()!r}: …{ctx!r}…")
         self._i += 1
 
     def _ws(self) -> None:
@@ -373,11 +369,11 @@ class _PendingMI:
     token: int
     event: threading.Event = field(default_factory=threading.Event)
     # Decoded stream lines routed here by the reader thread
-    console: List[str] = field(default_factory=list)   # ~"..."
-    log: List[str] = field(default_factory=list)        # &"..."
-    target: List[str] = field(default_factory=list)     # @"..."
+    console: list[str] = field(default_factory=list)  # ~"..."
+    log: list[str] = field(default_factory=list)  # &"..."
+    target: list[str] = field(default_factory=list)  # @"..."
     # Set by reader thread when the token^class,... line arrives
-    result_class: Optional[str] = None
+    result_class: str | None = None
     result_str: str = ""  # raw text after '^CLASS,' (without the leading comma)
 
 
@@ -418,13 +414,13 @@ class GDBSession(DebuggerSession):
     def __init__(
         self,
         dump_path: str,
-        debugger_path: Optional[str] = None,
-        symbols_path: Optional[str] = None,
-        image_path: Optional[str] = None,
-        initial_commands: Optional[List[str]] = None,
+        debugger_path: str | None = None,
+        symbols_path: str | None = None,
+        image_path: str | None = None,
+        initial_commands: list[str] | None = None,
         timeout: int = 30,
         verbose: bool = False,
-        additional_args: Optional[List[str]] = None,
+        additional_args: list[str] | None = None,
         use_mi: bool = True,
         **_kwargs: Any,
     ) -> None:
@@ -443,12 +439,11 @@ class GDBSession(DebuggerSession):
         self.debugger_path = self.find_debugger_executable(debugger_path)
         if not self.debugger_path:
             raise GDBError(
-                "Could not find gdb executable. "
-                "Install GDB or provide a path via --debugger-path."
+                "Could not find gdb executable. Install GDB or provide a path via --debugger-path."
             )
 
         # Build argv
-        argv: List[str] = [self.debugger_path, "-q", "-nx"]
+        argv: list[str] = [self.debugger_path, "-q", "-nx"]
         if use_mi:
             argv.append("--interpreter=mi2")
         if self.image_path:
@@ -459,7 +454,7 @@ class GDBSession(DebuggerSession):
             argv.extend(additional_args)
 
         try:
-            self.process: Optional[subprocess.Popen] = subprocess.Popen(
+            self.process: subprocess.Popen | None = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -480,11 +475,11 @@ class GDBSession(DebuggerSession):
 
         # Per-command response routing: token → _PendingMI
         self._pending_lock = threading.Lock()
-        self._pending_map: Dict[int, _PendingMI] = {}
+        self._pending_map: dict[int, _PendingMI] = {}
         # Pointer to the command currently receiving stream output; always
         # the same object as self._pending_map[current_token] while a
         # command is in-flight.
-        self._active_pending: Optional[_PendingMI] = None
+        self._active_pending: _PendingMI | None = None
 
         # Initialization barrier
         self._init_event = threading.Event()
@@ -496,7 +491,7 @@ class GDBSession(DebuggerSession):
 
         # CLI mode state
         self._cli_lock = threading.Lock()
-        self._cli_buffer: List[str] = []
+        self._cli_buffer: list[str] = []
         self._cli_marker_event = threading.Event()
         self._cli_marker_seen_time = 0.0
 
@@ -543,7 +538,7 @@ class GDBSession(DebuggerSession):
         return "GDB"
 
     @staticmethod
-    def find_debugger_executable(custom_path: Optional[str] = None) -> Optional[str]:
+    def find_debugger_executable(custom_path: str | None = None) -> str | None:
         if custom_path and os.path.isfile(custom_path):
             return custom_path
         for p in DEFAULT_GDB_PATHS:
@@ -552,7 +547,7 @@ class GDBSession(DebuggerSession):
         return shutil.which("gdb")
 
     @staticmethod
-    def get_local_dumps_path() -> Optional[str]:
+    def get_local_dumps_path() -> str | None:
         """Discover where core dumps land on this Linux system.
 
         Reads ``/proc/sys/kernel/core_pattern`` as the authoritative source.
@@ -589,7 +584,7 @@ class GDBSession(DebuggerSession):
     # Public command interface
     # ------------------------------------------------------------------
 
-    def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
+    def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         """Send a GDB command and return output lines.
 
         In MI mode the command is wrapped with ``interpreter-exec console``.
@@ -599,9 +594,7 @@ class GDBSession(DebuggerSession):
             return self._send_via_interpreter_exec(command, timeout)
         return self._send_cli_command(command, timeout)
 
-    def send_mi_command(
-        self, mi_command: str, timeout: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def send_mi_command(self, mi_command: str, timeout: int | None = None) -> dict[str, Any]:
         """Send a raw MI command and return the parsed response dict.
 
         Only available when ``use_mi=True``.  The returned dict has keys:
@@ -626,9 +619,9 @@ class GDBSession(DebuggerSession):
         and all-threads backtraces into a single string suitable for
         downstream source localization and AI-assisted triage.
         """
-        sections: List[str] = []
+        sections: list[str] = []
 
-        def _try(label: str, cmd: str, cmd_timeout: Optional[int] = None) -> None:
+        def _try(label: str, cmd: str, cmd_timeout: int | None = None) -> None:
             try:
                 out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
                 if out:
@@ -651,7 +644,7 @@ class GDBSession(DebuggerSession):
     # Structured crash analysis helpers (for AI triage)
     # ------------------------------------------------------------------
 
-    def get_crash_summary(self) -> Dict[str, Any]:
+    def get_crash_summary(self) -> dict[str, Any]:
         """Return a structured crash summary using MI commands.
 
         Keys in the returned dict:
@@ -663,7 +656,7 @@ class GDBSession(DebuggerSession):
         * ``registers``     — dict mapping register name → hex value
         * ``current_thread_id`` — id of the crashing thread
         """
-        summary: Dict[str, Any] = {
+        summary: dict[str, Any] = {
             "signal": None,
             "crash_frame": {},
             "backtrace": [],
@@ -673,9 +666,7 @@ class GDBSession(DebuggerSession):
         }
 
         if not self.use_mi:
-            summary["signal"] = "\n".join(
-                self.send_command("info signal", timeout=15)
-            )
+            summary["signal"] = "\n".join(self.send_command("info signal", timeout=15))
             return summary
 
         try:
@@ -683,9 +674,7 @@ class GDBSession(DebuggerSession):
             r = self._send_mi_command("thread-info")
             if r["class"] == "done":
                 summary["threads"] = r["results"].get("threads", [])
-                summary["current_thread_id"] = r["results"].get(
-                    "current-thread-id"
-                )
+                summary["current_thread_id"] = r["results"].get("current-thread-id")
 
             # Stack frames for the crashing thread
             r = self._send_mi_command("stack-list-frames")
@@ -693,11 +682,7 @@ class GDBSession(DebuggerSession):
                 raw_stack = r["results"].get("stack", [])
                 # Items are {"frame": {...}} from result-list parsing
                 summary["backtrace"] = [
-                    (
-                        item.get("frame", item)
-                        if isinstance(item, dict)
-                        else item
-                    )
+                    (item.get("frame", item) if isinstance(item, dict) else item)
                     for item in raw_stack
                 ]
                 if summary["backtrace"]:
@@ -729,24 +714,20 @@ class GDBSession(DebuggerSession):
 
         return summary
 
-    def get_thread_backtraces(self, max_frames: int = 100) -> List[Dict[str, Any]]:
+    def get_thread_backtraces(self, max_frames: int = 100) -> list[dict[str, Any]]:
         """Return per-thread backtraces as a list of structured dicts.
 
         Each dict has keys: ``id``, ``state``, ``target_id``, ``frames``
         (list of frame dicts) or ``raw`` (string) for CLI mode.
         """
         if not self.use_mi:
-            raw = self.send_command(
-                "thread apply all bt", timeout=self.timeout
-            )
+            raw = self.send_command("thread apply all bt", timeout=self.timeout)
             return [{"raw": "\n".join(raw)}]
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         try:
             ti = self._send_mi_command("thread-info")
-            threads = (
-                ti["results"].get("threads", []) if ti["class"] == "done" else []
-            )
+            threads = ti["results"].get("threads", []) if ti["class"] == "done" else []
         except GDBError:
             threads = []
 
@@ -756,20 +737,14 @@ class GDBSession(DebuggerSession):
                 # Select thread before listing its frames
                 self._send_mi_command(f"thread-select {tid}")
                 sf = self._send_mi_command(f"stack-list-frames 0 {max_frames}")
-                frames = (
-                    sf["results"].get("stack", []) if sf["class"] == "done" else []
-                )
+                frames = sf["results"].get("stack", []) if sf["class"] == "done" else []
                 results.append(
                     {
                         "id": tid,
                         "state": thread.get("state"),
                         "target_id": thread.get("target-id"),
                         "frames": [
-                            (
-                                item.get("frame", item)
-                                if isinstance(item, dict)
-                                else item
-                            )
+                            (item.get("frame", item) if isinstance(item, dict) else item)
                             for item in frames
                         ],
                     }
@@ -779,14 +754,14 @@ class GDBSession(DebuggerSession):
 
         return results
 
-    def get_frame_locals(self, frame_num: int = 0) -> Dict[str, Any]:
+    def get_frame_locals(self, frame_num: int = 0) -> dict[str, Any]:
         """Return local variables and arguments for *frame_num*.
 
         Uses MI ``-stack-list-locals`` / ``-stack-list-arguments`` for
         structured output; falls back to CLI ``info locals`` / ``info args``
         when MI is disabled.
         """
-        out: Dict[str, Any] = {"frame": frame_num, "locals": [], "args": []}
+        out: dict[str, Any] = {"frame": frame_num, "locals": [], "args": []}
 
         if not self.use_mi:
             out["raw"] = "\n".join(
@@ -802,9 +777,7 @@ class GDBSession(DebuggerSession):
             if r["class"] == "done":
                 out["locals"] = r["results"].get("locals", [])
 
-            a = self._send_mi_command(
-                f"stack-list-arguments --all-values {frame_num} {frame_num}"
-            )
+            a = self._send_mi_command(f"stack-list-arguments --all-values {frame_num} {frame_num}")
             if a["class"] == "done":
                 frames_arg = a["results"].get("stack-args", [])
                 if frames_arg:
@@ -812,22 +785,18 @@ class GDBSession(DebuggerSession):
                     if isinstance(item, dict):
                         frame_data = item.get("frame", item)
                         out["args"] = (
-                            frame_data.get("args", [])
-                            if isinstance(frame_data, dict)
-                            else []
+                            frame_data.get("args", []) if isinstance(frame_data, dict) else []
                         )
         except GDBError as exc:
             out["error"] = str(exc)
 
         return out
 
-    def get_variable(self, expr: str) -> Optional[str]:
+    def get_variable(self, expr: str) -> str | None:
         """Evaluate *expr* in the current frame.  Returns the value string."""
         if self.use_mi:
             try:
-                r = self._send_mi_command(
-                    f'data-evaluate-expression "{expr}"'
-                )
+                r = self._send_mi_command(f'data-evaluate-expression "{expr}"')
                 if r["class"] == "done":
                     return r["results"].get("value")
             except GDBError:
@@ -839,9 +808,7 @@ class GDBSession(DebuggerSession):
                 return line.strip()
         return None
 
-    def inspect_memory(
-        self, address: str, length: int = 64, unit: str = "b"
-    ) -> str:
+    def inspect_memory(self, address: str, length: int = 64, unit: str = "b") -> str:
         """Hex-dump *length* units at *address*.
 
         ``unit`` is a GDB format letter: ``b`` (byte), ``h`` (half-word),
@@ -852,7 +819,7 @@ class GDBSession(DebuggerSession):
 
     def get_disassembly(
         self,
-        location: Optional[str] = None,
+        location: str | None = None,
         n_instructions: int = 30,
     ) -> str:
         """Disassemble around the crash point (or *location*).
@@ -862,17 +829,15 @@ class GDBSession(DebuggerSession):
         if self.use_mi:
             try:
                 if location:
-                    mi_cmd = (
-                        f'data-disassemble -f "{location}" -n {n_instructions} -- 0'
-                    )
+                    mi_cmd = f'data-disassemble -f "{location}" -n {n_instructions} -- 0'
                 else:
                     byte_range = n_instructions * 4
-                    mi_cmd = f"data-disassemble -s $pc -e \"$pc+{byte_range}\" -- 0"
+                    mi_cmd = f'data-disassemble -s $pc -e "$pc+{byte_range}" -- 0'
                 r = self._send_mi_command(mi_cmd, timeout=15)
                 if r["class"] == "done":
                     insns = r["results"].get("asm_insns", [])
                     return "\n".join(
-                        f'{i.get("address", "?")}  {i.get("inst", "?")}'
+                        f"{i.get('address', '?')}  {i.get('inst', '?')}"
                         for i in insns
                         if isinstance(i, dict)
                     )
@@ -891,7 +856,7 @@ class GDBSession(DebuggerSession):
                 if names_r["class"] == "done" and vals_r["class"] == "done":
                     names = names_r["results"].get("register-names", [])
                     reg_vals = vals_r["results"].get("register-values", [])
-                    lines: List[str] = []
+                    lines: list[str] = []
                     for reg in reg_vals:
                         if isinstance(reg, dict):
                             idx = reg.get("number", "")
@@ -915,7 +880,7 @@ class GDBSession(DebuggerSession):
 
     def get_inferior_info(self) -> str:
         """Return binary/OS info about the inferior."""
-        lines: List[str] = []
+        lines: list[str] = []
         for cmd in ("info inferior", "show version", "info files"):
             try:
                 out = self.send_command(cmd, timeout=10)
@@ -935,9 +900,7 @@ class GDBSession(DebuggerSession):
             self._mi_token += 1
         return t
 
-    def _send_mi_command(
-        self, mi_cmd: str, timeout: Optional[int] = None
-    ) -> Dict[str, Any]:
+    def _send_mi_command(self, mi_cmd: str, timeout: int | None = None) -> dict[str, Any]:
         """Send a token-tagged MI command; wait on its dedicated Event.
 
         Thread safety
@@ -983,9 +946,7 @@ class GDBSession(DebuggerSession):
                     self._active_pending = None
 
         if not ok:
-            raise GDBError(
-                f"MI command timed out after {effective_timeout}s: {mi_cmd!r}"
-            )
+            raise GDBError(f"MI command timed out after {effective_timeout}s: {mi_cmd!r}")
 
         return {
             "class": pending.result_class,
@@ -995,14 +956,10 @@ class GDBSession(DebuggerSession):
             "target": pending.target,
         }
 
-    def _send_via_interpreter_exec(
-        self, command: str, timeout: Optional[int] = None
-    ) -> List[str]:
+    def _send_via_interpreter_exec(self, command: str, timeout: int | None = None) -> list[str]:
         """Run a console command through MI ``-interpreter-exec console``."""
         escaped = command.replace("\\", "\\\\").replace('"', '\\"')
-        r = self._send_mi_command(
-            f'interpreter-exec console "{escaped}"', timeout
-        )
+        r = self._send_mi_command(f'interpreter-exec console "{escaped}"', timeout)
         if r["class"] == "error":
             msg = r["results"].get("msg", "unknown GDB error")
             raise GDBError(f"GDB error for {command!r}: {msg}")
@@ -1012,9 +969,7 @@ class GDBSession(DebuggerSession):
     # CLI mode internals
     # ------------------------------------------------------------------
 
-    def _send_cli_command(
-        self, command: str, timeout: Optional[int] = None
-    ) -> List[str]:
+    def _send_cli_command(self, command: str, timeout: int | None = None) -> list[str]:
         if not self.process or not self.process.stdin:
             raise GDBError("GDB process is not running")
 
@@ -1036,9 +991,7 @@ class GDBSession(DebuggerSession):
                 self._activity_wait(command)
             else:
                 if not self._cli_marker_event.wait(timeout=effective_timeout):
-                    raise GDBError(
-                        f"Command timed out after {effective_timeout}s: {command!r}"
-                    )
+                    raise GDBError(f"Command timed out after {effective_timeout}s: {command!r}")
 
             self._drain_cli()
 
@@ -1046,7 +999,7 @@ class GDBSession(DebuggerSession):
                 raw_lines = list(self._cli_buffer)
                 self._cli_buffer.clear()
 
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         for line in raw_lines:
             if COMMAND_MARKER_TOKEN in line:
                 before = line.split(COMMAND_MARKER_TOKEN, 1)[0].rstrip()
@@ -1069,15 +1022,11 @@ class GDBSession(DebuggerSession):
             if self._cli_marker_event.wait(timeout=5):
                 return
             if self.process and self.process.poll() is not None:
-                raise GDBError(
-                    f"GDB process exited during command: {command!r}"
-                )
+                raise GDBError(f"GDB process exited during command: {command!r}")
             with self._cli_lock:
                 idle = time.monotonic() - self._last_output_time
             if idle >= _ACTIVITY_IDLE_LIMIT_S:
-                raise GDBError(
-                    f"Command stalled ({idle:.0f}s idle): {command!r}"
-                )
+                raise GDBError(f"Command stalled ({idle:.0f}s idle): {command!r}")
 
     def _drain_cli(
         self,
@@ -1196,8 +1145,8 @@ class GDBSession(DebuggerSession):
 
     def _configure_session(
         self,
-        symbols_path: Optional[str],
-        initial_commands: Optional[List[str]],
+        symbols_path: str | None,
+        initial_commands: list[str] | None,
     ) -> None:
         if self.use_mi:
             for cmd in (
@@ -1217,9 +1166,7 @@ class GDBSession(DebuggerSession):
                     sp = sp.strip()
                     if sp:
                         try:
-                            self._send_mi_command(
-                                f"gdb-set debug-file-directory {sp}"
-                            )
+                            self._send_mi_command(f"gdb-set debug-file-directory {sp}")
                         except GDBError:
                             pass
         else:
@@ -1250,11 +1197,7 @@ class GDBSession(DebuggerSession):
                 # Ask GDB to quit gracefully
                 try:
                     if proc.stdin:
-                        quit_cmd = (
-                            f"{self._next_token()}-gdb-exit\n"
-                            if self.use_mi
-                            else "quit\n"
-                        )
+                        quit_cmd = f"{self._next_token()}-gdb-exit\n" if self.use_mi else "quit\n"
                         proc.stdin.write(quit_cmd)
                         proc.stdin.flush()
                 except OSError:

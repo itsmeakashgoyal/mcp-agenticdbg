@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .base import DebuggerError, DebuggerSession
 
@@ -22,14 +22,17 @@ DEFAULT_LLDB_PATHS = [
 ]
 
 if sys.platform == "darwin":
-    DEFAULT_LLDB_PATHS.extend([
-        "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb",
-        "/Library/Developer/CommandLineTools/usr/bin/lldb",
-    ])
+    DEFAULT_LLDB_PATHS.extend(
+        [
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/lldb",
+            "/Library/Developer/CommandLineTools/usr/bin/lldb",
+        ]
+    )
 
 
 class LLDBError(DebuggerError):
     """Exception for LLDB-related errors."""
+
     pass
 
 
@@ -39,13 +42,13 @@ class LLDBSession(DebuggerSession):
     def __init__(
         self,
         dump_path: str,
-        debugger_path: Optional[str] = None,
-        symbols_path: Optional[str] = None,
-        image_path: Optional[str] = None,
-        initial_commands: Optional[List[str]] = None,
+        debugger_path: str | None = None,
+        symbols_path: str | None = None,
+        image_path: str | None = None,
+        initial_commands: list[str] | None = None,
         timeout: int = 10,
         verbose: bool = False,
-        additional_args: Optional[List[str]] = None,
+        additional_args: list[str] | None = None,
         **_kwargs,
     ):
         if not dump_path:
@@ -85,7 +88,7 @@ class LLDBSession(DebuggerSession):
             raise LLDBError(f"Failed to start LLDB process: {e}")
 
         # Output collection / delimiting
-        self._buffer: List[str] = []
+        self._buffer: list[str] = []
         self._lock = threading.Lock()
         self._command_lock = threading.Lock()
         self._ready_event = threading.Event()
@@ -93,7 +96,9 @@ class LLDBSession(DebuggerSession):
         self._marker_seen_time = 0.0
         self._last_output_time = time.monotonic()
 
-        self._reader_thread = threading.Thread(target=self._read_output, name="lldb-output-reader", daemon=True)
+        self._reader_thread = threading.Thread(
+            target=self._read_output, name="lldb-output-reader", daemon=True
+        )
         self._reader_thread.start()
 
         # Prime the session so we can safely send future commands.
@@ -137,7 +142,7 @@ class LLDBSession(DebuggerSession):
         return "LLDB"
 
     @staticmethod
-    def find_debugger_executable(custom_path: Optional[str] = None) -> Optional[str]:
+    def find_debugger_executable(custom_path: str | None = None) -> str | None:
         if custom_path and os.path.isfile(custom_path):
             return custom_path
         for path in DEFAULT_LLDB_PATHS:
@@ -149,7 +154,7 @@ class LLDBSession(DebuggerSession):
         return None
 
     @staticmethod
-    def get_local_dumps_path() -> Optional[str]:
+    def get_local_dumps_path() -> str | None:
         """Return the default crash dump directory for the current platform."""
         if sys.platform == "darwin":
             # macOS core dumps are written to /cores/core.<pid> by default.
@@ -175,9 +180,9 @@ class LLDBSession(DebuggerSession):
         Combines process status, all-thread backtraces, register state, and
         loaded images into a single string for downstream triage.
         """
-        sections: List[str] = []
+        sections: list[str] = []
 
-        def _try(label: str, cmd: str, cmd_timeout: Optional[int] = None) -> None:
+        def _try(label: str, cmd: str, cmd_timeout: int | None = None) -> None:
             try:
                 out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
                 if out:
@@ -196,7 +201,7 @@ class LLDBSession(DebuggerSession):
 
         return "\n".join(sections)
 
-    def get_crash_summary(self) -> Dict[str, Any]:
+    def get_crash_summary(self) -> dict[str, Any]:
         """Return a structured crash summary.
 
         Keys in the returned dict:
@@ -207,7 +212,7 @@ class LLDBSession(DebuggerSession):
         * ``threads``       — raw all-thread backtraces
         * ``registers``     — dict mapping register name → value
         """
-        summary: Dict[str, Any] = {
+        summary: dict[str, Any] = {
             "signal": None,
             "crash_frame": [],
             "backtrace": [],
@@ -216,9 +221,7 @@ class LLDBSession(DebuggerSession):
         }
 
         try:
-            summary["signal"] = "\n".join(
-                self.send_command("process status", timeout=10)
-            )
+            summary["signal"] = "\n".join(self.send_command("process status", timeout=10))
         except LLDBError:
             pass
 
@@ -252,7 +255,7 @@ class LLDBSession(DebuggerSession):
 
         return summary
 
-    def get_thread_backtraces(self, max_frames: int = 100) -> List[Dict[str, Any]]:
+    def get_thread_backtraces(self, max_frames: int = 100) -> list[dict[str, Any]]:
         """Return per-thread backtraces as a list of structured dicts.
 
         Each dict has ``id``, ``raw`` (backtrace text for that thread).
@@ -264,8 +267,8 @@ class LLDBSession(DebuggerSession):
 
         # Split the output into per-thread sections.
         # LLDB bt all output starts thread sections with "* thread #N" or "  thread #N"
-        threads: List[Dict[str, Any]] = []
-        current: Optional[Dict[str, Any]] = None
+        threads: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
         for line in raw:
             if "thread #" in line.lower():
                 if current is not None:
@@ -284,25 +287,21 @@ class LLDBSession(DebuggerSession):
 
         return threads
 
-    def get_frame_locals(self, frame_num: int = 0) -> Dict[str, Any]:
+    def get_frame_locals(self, frame_num: int = 0) -> dict[str, Any]:
         """Return local variables and arguments for *frame_num*."""
-        out: Dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
+        out: dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
         try:
             self.send_command(f"frame select {frame_num}", timeout=10)
             locals_out = self.send_command("frame variable", timeout=10)
             args_out = self.send_command("frame variable --show-globals false", timeout=10)
-            raw_lines = (
-                self.send_command(f"frame info", timeout=10)
-                + locals_out
-                + args_out
-            )
+            raw_lines = self.send_command("frame info", timeout=10) + locals_out + args_out
             out["raw"] = "\n".join(raw_lines)
             out["locals"] = locals_out
         except LLDBError as exc:
             out["error"] = str(exc)
         return out
 
-    def get_variable(self, expr: str) -> Optional[str]:
+    def get_variable(self, expr: str) -> str | None:
         """Evaluate *expr* in the current frame. Returns the value string."""
         try:
             out = self.send_command(f"expression {expr}", timeout=10)
@@ -329,14 +328,12 @@ class LLDBSession(DebuggerSession):
         ``unit`` is ignored (LLDB uses ``--size`` for element size);
         ``length`` is the byte count.
         """
-        out = self.send_command(
-            f"memory read --count {length} --format x {address}", timeout=15
-        )
+        out = self.send_command(f"memory read --count {length} --format x {address}", timeout=15)
         return "\n".join(out)
 
     def get_disassembly(
         self,
-        location: Optional[str] = None,
+        location: str | None = None,
         n_instructions: int = 30,
     ) -> str:
         """Disassemble around the crash point (or *location*)."""
@@ -374,7 +371,7 @@ class LLDBSession(DebuggerSession):
 
     def get_inferior_info(self) -> str:
         """Return binary/OS info about the inferior."""
-        lines: List[str] = []
+        lines: list[str] = []
         for cmd in ("target list", "image list", "target modules dump symtab"):
             try:
                 out = self.send_command(cmd, timeout=10)
@@ -401,14 +398,16 @@ class LLDBSession(DebuggerSession):
                         self._marker_seen = True
                         self._marker_seen_time = time.monotonic()
                         self._ready_event.set()
-        except (IOError, ValueError) as e:
+        except (OSError, ValueError) as e:
             logger.error("LLDB output reader error: %s", e)
 
-    def _wait_for_ready(self, timeout: Optional[int] = None) -> None:
+    def _wait_for_ready(self, timeout: int | None = None) -> None:
         # Ensure we can round-trip a simple command.
         self.send_command("version", timeout=timeout or self.timeout)
 
-    def _drain_until_quiet(self, *, min_grace_s: float = 0.05, idle_s: float = 0.05, max_grace_s: float = 0.6) -> None:
+    def _drain_until_quiet(
+        self, *, min_grace_s: float = 0.05, idle_s: float = 0.05, max_grace_s: float = 0.6
+    ) -> None:
         """After marker is observed, wait for LLDB to finish emitting output.
 
         On some LLDB builds, a command's stdout may arrive slightly after a
@@ -427,7 +426,7 @@ class LLDBSession(DebuggerSession):
                 return
             time.sleep(0.02)
 
-    def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
+    def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         if not self.process or not self.process.stdin:
             raise LLDBError("LLDB process is not running")
 
@@ -443,7 +442,7 @@ class LLDBSession(DebuggerSession):
             try:
                 self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
                 self.process.stdin.flush()
-            except IOError as e:
+            except OSError as e:
                 raise LLDBError(f"Failed to send command: {e}")
 
             if not self._ready_event.wait(timeout=fixed_timeout):
@@ -457,7 +456,7 @@ class LLDBSession(DebuggerSession):
                 self._buffer = []
 
             # Strip the marker line(s) from output.
-            cleaned: List[str] = []
+            cleaned: list[str] = []
             for line in lines:
                 if COMMAND_MARKER_TOKEN in line:
                     before = line.split(COMMAND_MARKER_TOKEN, 1)[0].rstrip()

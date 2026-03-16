@@ -3,15 +3,12 @@
 Uses real-world GDB MI output strings captured from actual sessions.
 """
 
-import pytest
-
-from triagepilot.backends.gdb import MIParser, MIParseError
+from triagepilot.backends.gdb import MIParser
 from triagepilot.tools.debugger_tools import (
-    _parse_gdb_source_locations,
     _extract_gdb_functions,
+    _parse_gdb_source_locations,
     locate_faulting_source,
 )
-
 
 # ===========================================================================
 # MIParser.parse_stream_record
@@ -138,7 +135,7 @@ class TestMIParserTuple:
 
 class TestMIParserList:
     def test_empty_list(self):
-        result = MIParser.parse('stack=[]')
+        result = MIParser.parse("stack=[]")
         assert result["stack"] == []
 
     def test_list_of_tuples(self):
@@ -195,7 +192,7 @@ class TestParseResultRecord:
             '1003^error,msg="No symbol table. Use the \\"file\\" command."'
         )
         assert r["class"] == "error"
-        assert 'file' in r["results"]["msg"]
+        assert "file" in r["results"]["msg"]
 
     def test_done_with_frame(self):
         r = MIParser.parse_result_record(
@@ -210,10 +207,10 @@ class TestParseResultRecord:
 
     def test_register_values(self):
         r = MIParser.parse_result_record(
-            '1005^done,register-values=['
+            "1005^done,register-values=["
             '{number="0",value="0x0"},'
             '{number="17",value="0x7fffffffe8f8"}'
-            ']'
+            "]"
         )
         regs = r["results"]["register-values"]
         assert len(regs) == 2
@@ -230,7 +227,7 @@ class TestParseResultRecord:
 
     def test_thread_info(self):
         r = MIParser.parse_result_record(
-            '1007^done,threads=['
+            "1007^done,threads=["
             '{id="1",target-id="Thread 0x7f (LWP 1234)",'
             'frame={level="0",addr="0x00400a10",func="segfault_func"},'
             'state="stopped"}'
@@ -245,12 +242,12 @@ class TestParseResultRecord:
 
     def test_stack_list_frames(self):
         r = MIParser.parse_result_record(
-            '1008^done,stack=['
+            "1008^done,stack=["
             'frame={level="0",addr="0x00400a10",func="crash_func",'
             'file="crash.cpp",fullname="/src/crash.cpp",line="15"},'
             'frame={level="1",addr="0x00400b20",func="main",'
             'file="main.cpp",fullname="/src/main.cpp",line="42"}'
-            ']'
+            "]"
         )
         frames = r["results"]["stack"]
         assert len(frames) == 2
@@ -260,10 +257,7 @@ class TestParseResultRecord:
 
     def test_stack_list_locals(self):
         r = MIParser.parse_result_record(
-            '1009^done,locals=['
-            '{name="ptr",value="0x0"},'
-            '{name="count",value="42"}'
-            ']'
+            '1009^done,locals=[{name="ptr",value="0x0"},{name="count",value="42"}]'
         )
         locals_ = r["results"]["locals"]
         assert locals_[0]["name"] == "ptr"
@@ -275,12 +269,12 @@ class TestParseResultRecord:
 
     def test_disassembly(self):
         r = MIParser.parse_result_record(
-            '1011^done,asm_insns=['
+            "1011^done,asm_insns=["
             '{address="0x00400a10",func-name="main",offset="0",'
             'inst="push   %rbp"},'
             '{address="0x00400a11",func-name="main",offset="1",'
             'inst="mov    %rsp,%rbp"}'
-            ']'
+            "]"
         )
         insns = r["results"]["asm_insns"]
         assert len(insns) == 2
@@ -338,19 +332,19 @@ class TestMIParserEdgeCases:
     def test_complex_real_world_thread_info(self):
         """Verbatim -thread-info response from a real segfault session."""
         payload = (
-            'threads=[{'
+            "threads=[{"
             'id="1",'
             'target-id="process 12345",'
             'name="test_prog",'
-            'frame={'
+            "frame={"
             'level="0",'
             'addr="0x00007f1234abcdef",'
             'func="std::__throw_bad_alloc",'
-            'args=[],'
+            "args=[],"
             'from="/usr/lib/x86_64-linux-gnu/libstdc++.so.6"'
-            '},'
+            "},"
             'state="stopped"'
-            '}],'
+            "}],"
             'current-thread-id="1"'
         )
         r = MIParser.parse(payload)
@@ -362,10 +356,10 @@ class TestMIParserEdgeCases:
 
     def test_register_values_with_large_hex(self):
         payload = (
-            'register-values=['
+            "register-values=["
             '{number="6",value="0x00007fffffffdf80"},'
             '{number="7",value="0x0000000000000000"}'
-            ']'
+            "]"
         )
         r = MIParser.parse(payload)
         vals = r["register-values"]
@@ -387,8 +381,7 @@ class TestParseGdbSourceLocations:
 
     def test_multiple_frames(self):
         text = (
-            "#0  crash_func () at src/crash.cpp:15\n"
-            "#1  0x00400b20 in main () at src/main.cpp:42\n"
+            "#0  crash_func () at src/crash.cpp:15\n#1  0x00400b20 in main () at src/main.cpp:42\n"
         )
         locs = _parse_gdb_source_locations(text)
         assert len(locs) == 2
@@ -427,10 +420,7 @@ class TestParseGdbSourceLocations:
 
 class TestExtractGdbFunctions:
     def test_basic_extraction(self):
-        text = (
-            "#0  0x00400a10 in crash_function ()\n"
-            "#1  0x00400b20 in main ()\n"
-        )
+        text = "#0  0x00400a10 in crash_function ()\n#1  0x00400b20 in main ()\n"
         funcs = _extract_gdb_functions(text)
         assert "crash_function" in funcs
         assert "main" in funcs
@@ -450,11 +440,7 @@ class TestExtractGdbFunctions:
         assert "push_back" in funcs
 
     def test_skips_runtime_frames(self):
-        text = (
-            "#0  __libc_start_main ()\n"
-            "#1  _start ()\n"
-            "#2  crash_func ()\n"
-        )
+        text = "#0  __libc_start_main ()\n#1  _start ()\n#2  crash_func ()\n"
         funcs = _extract_gdb_functions(text)
         assert "__libc_start_main" not in funcs
         assert "_start" not in funcs
@@ -495,16 +481,9 @@ class TestLocateFaultingSourceGDB:
 
     def test_level0_picks_innermost_frame(self, tmp_path):
         """Level 0: innermost frame (frame 0) should be preferred."""
-        (tmp_path / "inner.cpp").write_text(
-            "\n".join(f"line {i}" for i in range(1, 30))
-        )
-        (tmp_path / "outer.cpp").write_text(
-            "\n".join(f"line {i}" for i in range(1, 30))
-        )
-        text = (
-            "#0  inner_func () at inner.cpp:5\n"
-            "#1  outer_func () at outer.cpp:20\n"
-        )
+        (tmp_path / "inner.cpp").write_text("\n".join(f"line {i}" for i in range(1, 30)))
+        (tmp_path / "outer.cpp").write_text("\n".join(f"line {i}" for i in range(1, 30)))
+        text = "#0  inner_func () at inner.cpp:5\n#1  outer_func () at outer.cpp:20\n"
         result = locate_faulting_source(text, str(tmp_path))
         assert "inner.cpp" in result
         assert "outer.cpp" not in result
@@ -512,17 +491,9 @@ class TestLocateFaultingSourceGDB:
     def test_level3b_gdb_function_search(self, tmp_path):
         """Level 3b: when no file match, search by GDB function name."""
         src = tmp_path / "engine.cpp"
-        src.write_text(
-            "// engine\n"
-            "void ProcessData(int x) {\n"
-            "    // crashes here\n"
-            "}\n"
-        )
+        src.write_text("// engine\nvoid ProcessData(int x) {\n    // crashes here\n}\n")
         # GDB backtrace with function but no file (stripped binary)
-        text = (
-            "#0  0x00400a10 in ProcessData (x=0)\n"
-            "#1  0x00400b20 in main ()\n"
-        )
+        text = "#0  0x00400a10 in ProcessData (x=0)\n#1  0x00400b20 in main ()\n"
         result = locate_faulting_source(text, str(tmp_path))
         assert result is not None
         assert "GDB Frame Search" in result
@@ -531,9 +502,7 @@ class TestLocateFaultingSourceGDB:
     def test_level0_falls_through_to_level1_if_no_file_match(self, tmp_path):
         """If GDB at-file not found in repo, fall through to CDB Level 1."""
         # Create a file matching the CDB FAULTING_SOURCE_FILE pattern
-        (tmp_path / "CdbFault.cpp").write_text(
-            "\n".join(f"line {i}" for i in range(1, 30))
-        )
+        (tmp_path / "CdbFault.cpp").write_text("\n".join(f"line {i}" for i in range(1, 30)))
         text = (
             "#0  crash () at NonExistent.cpp:5\n"
             "FAULTING_SOURCE_FILE: CdbFault.cpp\n"
@@ -564,11 +533,11 @@ class TestLocateFaultingSourceGDB:
             "SIGSEGV Yes\tYes\tYes\t\tSegmentation fault\n"
             "\n"
             "=== Crash Frame ===\n"
-            "#0  crash_function (ptr=0x602010 \"\") at use-after-free.cpp:3\n"
+            '#0  crash_function (ptr=0x602010 "") at use-after-free.cpp:3\n'
             "\n"
             "=== Backtrace (full) ===\n"
-            "#0  crash_function (ptr=0x602010 \"\") at use-after-free.cpp:3\n"
-            "        ptr = 0x602010 \"\"\n"
+            '#0  crash_function (ptr=0x602010 "") at use-after-free.cpp:3\n'
+            '        ptr = 0x602010 ""\n'
             "#1  0x00000000004007e0 in main () at use-after-free.cpp:8\n"
             "No locals.\n"
         )

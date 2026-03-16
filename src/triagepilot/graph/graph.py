@@ -4,23 +4,22 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
-from .state import CrashAnalysisState
+from .edges import route_changes, should_retry_analyze
 from .nodes import (
     analyze_dump_node,
-    extract_metadata_node,
-    source_lookup_node,
-    root_cause_node,
-    suggest_fix_node,
     classify_changes_node,
     create_pr_node,
+    extract_metadata_node,
+    root_cause_node,
     shared_patch_node,
+    source_lookup_node,
+    suggest_fix_node,
     summary_node,
 )
-from .edges import should_retry_analyze, route_changes
+from .state import CrashAnalysisState
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,7 @@
+# Default: repo owner reviews all PRs
+*                                   @AkashGoyal
+
+# Platform-specific backends (add co-maintainers here as the project grows)
+# src/triagepilot/backends/cdb.py   @AkashGoyal
+# src/triagepilot/backends/gdb.py   @AkashGoyal
+# src/triagepilot/backends/lldb.py  @AkashGoyal

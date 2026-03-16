@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .base import DebuggerError, DebuggerSession
 
@@ -45,6 +45,7 @@ _MAX_WALL_CLOCK_S = 600
 
 class CDBError(DebuggerError):
     """Exception for CDB-related errors."""
+
     pass
 
 
@@ -54,13 +55,13 @@ class CDBSession(DebuggerSession):
     def __init__(
         self,
         dump_path: str,
-        debugger_path: Optional[str] = None,
-        symbols_path: Optional[str] = None,
-        image_path: Optional[str] = None,
-        initial_commands: Optional[List[str]] = None,
+        debugger_path: str | None = None,
+        symbols_path: str | None = None,
+        image_path: str | None = None,
+        initial_commands: list[str] | None = None,
         timeout: int = 10,
         verbose: bool = False,
-        additional_args: Optional[List[str]] = None,
+        additional_args: list[str] | None = None,
         **_kwargs,
     ):
         if not dump_path:
@@ -113,7 +114,7 @@ class CDBSession(DebuggerSession):
             raise CDBError(f"Failed to start CDB process: {e}")
 
         # Output collection / delimiting
-        self._buffer: List[str] = []
+        self._buffer: list[str] = []
         self._lock = threading.Lock()
         self._command_lock = threading.Lock()
         self._ready_event = threading.Event()
@@ -122,7 +123,9 @@ class CDBSession(DebuggerSession):
         self._last_output_time = time.monotonic()
 
         self._reader_thread = threading.Thread(
-            target=self._read_output, name="cdb-output-reader", daemon=True,
+            target=self._read_output,
+            name="cdb-output-reader",
+            daemon=True,
         )
         self._reader_thread.start()
 
@@ -165,7 +168,7 @@ class CDBSession(DebuggerSession):
         return "CDB"
 
     @staticmethod
-    def find_debugger_executable(custom_path: Optional[str] = None) -> Optional[str]:
+    def find_debugger_executable(custom_path: str | None = None) -> str | None:
         if custom_path and os.path.isfile(custom_path):
             return custom_path
         for path in DEFAULT_CDB_PATHS:
@@ -177,10 +180,11 @@ class CDBSession(DebuggerSession):
         return None
 
     @staticmethod
-    def get_local_dumps_path() -> Optional[str]:
+    def get_local_dumps_path() -> str | None:
         """Get the default crash dumps path from Windows registry."""
         try:
             import winreg
+
             with winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
                 r"SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps",
@@ -204,9 +208,9 @@ class CDBSession(DebuggerSession):
         Combines last-event, full analysis, backtraces, registers, modules,
         and target info into a single string for downstream triage.
         """
-        sections: List[str] = []
+        sections: list[str] = []
 
-        def _try(label: str, cmd: str, cmd_timeout: Optional[int] = None) -> None:
+        def _try(label: str, cmd: str, cmd_timeout: int | None = None) -> None:
             try:
                 out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
                 if out:
@@ -217,16 +221,16 @@ class CDBSession(DebuggerSession):
                 logger.debug("run_crash_analysis: %s failed: %s", label, exc)
 
         _try("Last Event", ".lastevent", 10)
-        _try("Crash Analysis", "!analyze -v")           # slow, activity-based
+        _try("Crash Analysis", "!analyze -v")  # slow, activity-based
         _try("Backtrace (current thread)", "kb", 15)
-        _try("All Thread Backtraces", "~*kb")            # slow
+        _try("All Thread Backtraces", "~*kb")  # slow
         _try("Registers", "r", 15)
         _try("Loaded Modules", "lm")
         _try("Target Info", "vertarget", 10)
 
         return "\n".join(sections)
 
-    def get_crash_summary(self) -> Dict[str, Any]:
+    def get_crash_summary(self) -> dict[str, Any]:
         """Return a structured crash summary.
 
         Keys in the returned dict:
@@ -237,7 +241,7 @@ class CDBSession(DebuggerSession):
         * ``threads``       — raw all-thread backtraces
         * ``registers``     — dict mapping register name → value
         """
-        summary: Dict[str, Any] = {
+        summary: dict[str, Any] = {
             "signal": None,
             "crash_frame": [],
             "backtrace": [],
@@ -246,9 +250,7 @@ class CDBSession(DebuggerSession):
         }
 
         try:
-            summary["signal"] = "\n".join(
-                self.send_command(".lastevent", timeout=10)
-            )
+            summary["signal"] = "\n".join(self.send_command(".lastevent", timeout=10))
         except CDBError:
             pass
 
@@ -283,7 +285,7 @@ class CDBSession(DebuggerSession):
 
         return summary
 
-    def get_thread_backtraces(self, max_frames: int = 100) -> List[Dict[str, Any]]:
+    def get_thread_backtraces(self, max_frames: int = 100) -> list[dict[str, Any]]:
         """Return per-thread backtraces as a list of structured dicts.
 
         Each dict has ``id``, ``raw`` (backtrace text for that thread).
@@ -299,8 +301,8 @@ class CDBSession(DebuggerSession):
         #   ".  1  Id: ..."
         #   "#  2  Id: ..."
         _THREAD_HDR = re.compile(r"^[\s.#*]+\d+\s+Id:")
-        threads: List[Dict[str, Any]] = []
-        current: Optional[Dict[str, Any]] = None
+        threads: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
         for line in raw:
             if _THREAD_HDR.match(line):
                 if current is not None:
@@ -319,9 +321,9 @@ class CDBSession(DebuggerSession):
 
         return threads
 
-    def get_frame_locals(self, frame_num: int = 0) -> Dict[str, Any]:
+    def get_frame_locals(self, frame_num: int = 0) -> dict[str, Any]:
         """Return local variables and arguments for *frame_num*."""
-        out: Dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
+        out: dict[str, Any] = {"frame": frame_num, "locals": [], "args": [], "raw": ""}
         try:
             self.send_command(f".frame {frame_num}", timeout=10)
             locals_out = self.send_command("dv /t", timeout=10)
@@ -331,7 +333,7 @@ class CDBSession(DebuggerSession):
             out["error"] = str(exc)
         return out
 
-    def get_variable(self, expr: str) -> Optional[str]:
+    def get_variable(self, expr: str) -> str | None:
         """Evaluate *expr* in the current frame.
 
         Tries ``??`` (C++ typed evaluation) first, then falls back to
@@ -364,7 +366,7 @@ class CDBSession(DebuggerSession):
 
     def get_disassembly(
         self,
-        location: Optional[str] = None,
+        location: str | None = None,
         n_instructions: int = 30,
     ) -> str:
         """Disassemble around the crash point (or *location*)."""
@@ -402,7 +404,7 @@ class CDBSession(DebuggerSession):
 
     def get_inferior_info(self) -> str:
         """Return binary/OS info about the target."""
-        lines: List[str] = []
+        lines: list[str] = []
         for label, cmd in (("Target Info", "vertarget"), ("Process Environment", "!peb")):
             try:
                 out = self.send_command(cmd, timeout=15)
@@ -416,7 +418,7 @@ class CDBSession(DebuggerSession):
 
     # -- CDB-specific helpers -----------------------------------------------
 
-    def _normalize_symbols_path(self, symbols_path: Optional[str]) -> Optional[str]:
+    def _normalize_symbols_path(self, symbols_path: str | None) -> str | None:
         """Normalize symbols path input for CDB ``-y``.
 
         If a segment is a concrete ``.pdb`` path, convert it to the parent
@@ -434,7 +436,7 @@ class CDBSession(DebuggerSession):
             normalized_parts.append(part)
         return ";".join(normalized_parts) if normalized_parts else symbols_path
 
-    def _normalize_image_path(self, image_path: Optional[str]) -> Optional[str]:
+    def _normalize_image_path(self, image_path: str | None) -> str | None:
         """Normalize image path input for CDB ``-i``."""
         if not image_path:
             return image_path
@@ -444,7 +446,9 @@ class CDBSession(DebuggerSession):
             if not part:
                 continue
             lower_part = part.lower()
-            if (lower_part.endswith(".exe") or lower_part.endswith(".dll")) and os.path.isfile(part):
+            if (lower_part.endswith(".exe") or lower_part.endswith(".dll")) and os.path.isfile(
+                part
+            ):
                 part = os.path.dirname(part)
             normalized_parts.append(part)
         return ";".join(normalized_parts) if normalized_parts else image_path
@@ -474,7 +478,7 @@ class CDBSession(DebuggerSession):
                         self._ready_event.set()
                     else:
                         self._buffer.append(line)
-        except (IOError, ValueError) as e:
+        except (OSError, ValueError) as e:
             logger.error("CDB output reader error: %s", e)
 
     def _drain_until_quiet(
@@ -513,10 +517,10 @@ class CDBSession(DebuggerSession):
             self.process.stdin.flush()
             if not self._ready_event.wait(timeout=timeout or self.timeout):
                 raise CDBError("Timed out waiting for CDB prompt")
-        except IOError as e:
+        except OSError as e:
             raise CDBError(f"Failed to communicate with CDB: {e}")
 
-    def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
+    def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         if not self.process:
             raise CDBError("CDB process is not running")
 
@@ -530,7 +534,7 @@ class CDBSession(DebuggerSession):
             try:
                 self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
                 self.process.stdin.flush()
-            except IOError as e:
+            except OSError as e:
                 raise CDBError(f"Failed to send command: {e}")
 
             if timeout is None and self._is_slow_command(command):

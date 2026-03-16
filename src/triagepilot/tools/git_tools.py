@@ -6,10 +6,9 @@ import logging
 import os
 import subprocess
 import time
-from typing import List, Optional, Tuple
 
 from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, TextContent, INVALID_PARAMS, INTERNAL_ERROR
+from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, ErrorData, TextContent
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ def _normalize_rel_path(path_value: str) -> str:
     return path_value.replace("\\", "/").lstrip("./")
 
 
-def _parse_porcelain_path(line: str) -> Optional[str]:
+def _parse_porcelain_path(line: str) -> str | None:
     """Parse path from one git status --porcelain line."""
     if len(line) < 4:
         return None
@@ -80,11 +79,11 @@ def _parse_porcelain_path(line: str) -> Optional[str]:
     return _normalize_rel_path(raw)
 
 
-def _collect_changed_paths(repo_path: str) -> Tuple[List[str], List[str]]:
+def _collect_changed_paths(repo_path: str) -> tuple[list[str], list[str]]:
     """Collect changed non-ignored and ignored paths from git status."""
     output = _run_process(["git", "status", "--porcelain", "--ignored"], cwd=repo_path).stdout
-    non_ignored: List[str] = []
-    ignored: List[str] = []
+    non_ignored: list[str] = []
+    ignored: list[str] = []
     for line in output.splitlines():
         parsed = _parse_porcelain_path(line)
         if not parsed:
@@ -96,17 +95,17 @@ def _collect_changed_paths(repo_path: str) -> Tuple[List[str], List[str]]:
     return non_ignored, ignored
 
 
-def _list_ignored_paths(repo_path: str) -> List[str]:
+def _list_ignored_paths(repo_path: str) -> list[str]:
     """List ignored paths reported by git status."""
     output = _run_process(["git", "status", "--porcelain", "--ignored"], cwd=repo_path).stdout
-    ignored: List[str] = []
+    ignored: list[str] = []
     for line in output.splitlines():
         if line.startswith("!! "):
             ignored.append(_normalize_rel_path(line[3:].strip()))
     return ignored
 
 
-def _filter_shared_paths(paths: List[str], hints: List[str]) -> List[str]:
+def _filter_shared_paths(paths: list[str], hints: list[str]) -> list[str]:
     """Filter paths that match any shared-component hint prefix."""
     normalized_hints = [h.replace("\\", "/").rstrip("/") + "/" for h in hints if h.strip()]
     if not normalized_hints:
@@ -119,7 +118,7 @@ def _filter_shared_paths(paths: List[str], hints: List[str]) -> List[str]:
     return matched
 
 
-def _is_path_in_prefixes(path_value: str, prefixes: List[str]) -> bool:
+def _is_path_in_prefixes(path_value: str, prefixes: list[str]) -> bool:
     """Return True when path equals/is nested under any normalized prefix."""
     normalized = _normalize_rel_path(path_value)
     normalized_prefixes = [
@@ -133,10 +132,10 @@ def _is_path_in_prefixes(path_value: str, prefixes: List[str]) -> bool:
     return False
 
 
-def _list_submodule_paths(repo_path: str) -> List[str]:
+def _list_submodule_paths(repo_path: str) -> list[str]:
     """List git submodule paths using git index mode 160000."""
     output = _run_process(["git", "ls-files", "--stage"], cwd=repo_path).stdout
-    paths: List[str] = []
+    paths: list[str] = []
     for line in output.splitlines():
         if "\t" not in line:
             continue
@@ -148,15 +147,15 @@ def _list_submodule_paths(repo_path: str) -> List[str]:
 
 
 def _filter_committable_paths(
-    paths: List[str],
-    shared_hints: List[str],
-    external_hints: List[str],
-    submodule_paths: List[str],
-) -> List[str]:
+    paths: list[str],
+    shared_hints: list[str],
+    external_hints: list[str],
+    submodule_paths: list[str],
+) -> list[str]:
     """Keep only paths that should be considered committable in current repo."""
     shared = set(_filter_shared_paths(paths, shared_hints))
     external = set(_filter_shared_paths(paths, external_hints)) if external_hints else set()
-    result: List[str] = []
+    result: list[str] = []
     for path_value in paths:
         normalized = _normalize_rel_path(path_value)
         if normalized in shared:
@@ -179,13 +178,15 @@ def _load_pr_template(repo_path: str) -> str:
     template_candidates = [
         os.path.join(repo_path, ".github", "pull_request_template.md"),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", ".github", "pull_request_template.md")
+            os.path.join(
+                os.path.dirname(__file__), "..", "..", "..", ".github", "pull_request_template.md"
+            )
         ),
     ]
 
     for template_path in template_candidates:
         if os.path.isfile(template_path):
-            with open(template_path, "r", encoding="utf-8") as f:
+            with open(template_path, encoding="utf-8") as f:
                 content = f.read().strip()
             if content:
                 return content
@@ -267,13 +268,19 @@ def _write_suggested_changes_md(repo_path: str, args, reason: str) -> str:
         "",
         "## Suggested DEV DESCRIPTION",
         "### Issue",
-        args.issue_description.strip() if args.issue_description else "_Briefly describe the problem or requirement._",
+        args.issue_description.strip()
+        if args.issue_description
+        else "_Briefly describe the problem or requirement._",
         "",
         "### What are the changes to fix this issue?",
-        args.changes_description.strip() if args.changes_description else "_Summarize the key changes made to address the issue._",
+        args.changes_description.strip()
+        if args.changes_description
+        else "_Summarize the key changes made to address the issue._",
         "",
         "### Follow-ups",
-        args.follow_ups.strip() if args.follow_ups else "_List any pending scenarios and related JIRA tickets._",
+        args.follow_ups.strip()
+        if args.follow_ups
+        else "_List any pending scenarios and related JIRA tickets._",
         "",
     ]
 
@@ -290,16 +297,18 @@ def _write_suggested_changes_md(repo_path: str, args, reason: str) -> str:
 
 def _write_shared_patch_md(
     repo_path: str,
-    jira_id: Optional[str],
-    issue_description: Optional[str],
-    changes_description: Optional[str],
-    follow_ups: Optional[str],
-    shared_paths: List[str],
-    output_path: Optional[str] = None,
+    jira_id: str | None,
+    issue_description: str | None,
+    changes_description: str | None,
+    follow_ups: str | None,
+    shared_paths: list[str],
+    output_path: str | None = None,
 ) -> str:
     """Write markdown patch instructions for shared/gitignored changes."""
     if output_path:
-        md_path = output_path if os.path.isabs(output_path) else os.path.join(repo_path, output_path)
+        md_path = (
+            output_path if os.path.isabs(output_path) else os.path.join(repo_path, output_path)
+        )
     else:
         ts = time.strftime("%Y%m%d_%H%M%S")
         md_path = os.path.join(repo_path, f"shared_patch_{ts}.md")
@@ -323,7 +332,9 @@ def _write_shared_patch_md(
             issue_description.strip() if issue_description else "_Briefly describe the issue._",
             "",
             "## Suggested Changes",
-            changes_description.strip() if changes_description else "_Describe suggested patch changes._",
+            changes_description.strip()
+            if changes_description
+            else "_Describe suggested patch changes._",
             "",
             "## Follow-ups",
             follow_ups.strip() if follow_ups else "_List follow-up validation steps._",
@@ -366,12 +377,14 @@ def _validate_branch_name(branch: str) -> None:
 
 def _ensure_branch_for_pr(
     repo_path: str,
-    requested_branch: Optional[str],
+    requested_branch: str | None,
     auto_create_branch: bool,
-    jira_id: Optional[str] = None,
+    jira_id: str | None = None,
 ) -> str:
     """Ensure we are on a usable branch and return branch name."""
-    current_branch = _run_process(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path).stdout.strip()
+    current_branch = _run_process(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path
+    ).stdout.strip()
 
     if requested_branch:
         _validate_branch_name(requested_branch)
@@ -399,7 +412,10 @@ def _ensure_branch_for_pr(
             )
         source = jira_id.strip().lower() if jira_id else "fix_feature"
         source = source.replace(" ", "_").replace("/", "_").replace("\\", "_").replace("-", "_")
-        feature = "".join(ch for ch in source if ch.isalnum() or ch in "._-").strip("._-") or "fix_feature"
+        feature = (
+            "".join(ch for ch in source if ch.isalnum() or ch in "._-").strip("._-")
+            or "fix_feature"
+        )
         generated = f"users/{_DEFAULT_LDAP}/{feature}"
         candidate = generated
         counter = 2
@@ -426,7 +442,9 @@ def _ensure_branch_for_pr(
 # ---------------------------------------------------------------------------
 
 
-async def handle_create_shared_patch(arguments: dict, *, CreateSharedPatchParams) -> list[TextContent]:
+async def handle_create_shared_patch(
+    arguments: dict, *, CreateSharedPatchParams
+) -> list[TextContent]:
     args = CreateSharedPatchParams(**arguments)
     target_repo_path = os.path.abspath(args.repo_path or os.getcwd())
 
@@ -436,10 +454,14 @@ async def handle_create_shared_patch(arguments: dict, *, CreateSharedPatchParams
         check=False,
     )
     if repo_check.returncode != 0 or repo_check.stdout.strip() != "true":
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Not a git repository: {target_repo_path}"))
+        raise McpError(
+            ErrorData(code=INVALID_PARAMS, message=f"Not a git repository: {target_repo_path}")
+        )
 
     non_ignored_paths, ignored_paths = _collect_changed_paths(target_repo_path)
-    shared_paths = _filter_shared_paths(non_ignored_paths + ignored_paths, args.shared_component_path_hints)
+    shared_paths = _filter_shared_paths(
+        non_ignored_paths + ignored_paths, args.shared_component_path_hints
+    )
     md_path = _write_shared_patch_md(
         target_repo_path,
         args.jira_id,
@@ -477,10 +499,12 @@ async def handle_create_repo_pr(arguments: dict, *, CreateRepoPrParams) -> list[
 
     try:
         non_ignored_paths, ignored_paths = _collect_changed_paths(repo_path)
-        shared_hints = args.shared_component_path_hints if args.handle_shared_component_changes else []
+        shared_hints = (
+            args.shared_component_path_hints if args.handle_shared_component_changes else []
+        )
         submodule_paths = _list_submodule_paths(repo_path) if args.exclude_submodule_changes else []
 
-        shared_paths: List[str] = (
+        shared_paths: list[str] = (
             _filter_shared_paths(non_ignored_paths + ignored_paths, shared_hints)
             if args.handle_shared_component_changes
             else []
@@ -530,27 +554,37 @@ async def handle_create_repo_pr(arguments: dict, *, CreateRepoPrParams) -> list[
                         text=f"No commitable changes found, so PR was not created.\nCreated suggested changes file: {md_path}",
                     )
                 ]
-            return [TextContent(type="text", text="No commitable repo changes found. Nothing to PR.")]
+            return [
+                TextContent(type="text", text="No commitable repo changes found. Nothing to PR.")
+            ]
 
         if args.stage_all:
             _run_process(["git", "add", "-A"], cwd=repo_path)
             for hint in shared_hints:
                 pathspec = hint.replace("\\", "/").rstrip("/")
                 if pathspec:
-                    _run_process(["git", "reset", "HEAD", "--", pathspec], cwd=repo_path, check=False)
+                    _run_process(
+                        ["git", "reset", "HEAD", "--", pathspec], cwd=repo_path, check=False
+                    )
             for hint in args.external_dependency_path_hints:
                 pathspec = hint.replace("\\", "/").rstrip("/")
                 if pathspec:
-                    _run_process(["git", "reset", "HEAD", "--", pathspec], cwd=repo_path, check=False)
+                    _run_process(
+                        ["git", "reset", "HEAD", "--", pathspec], cwd=repo_path, check=False
+                    )
             for sub_path in submodule_paths:
                 _run_process(["git", "reset", "HEAD", "--", sub_path], cwd=repo_path, check=False)
-            _run_process(["git", "reset", "HEAD", "--", "mcp-server.log"], cwd=repo_path, check=False)
+            _run_process(
+                ["git", "reset", "HEAD", "--", "mcp-server.log"], cwd=repo_path, check=False
+            )
 
         excluded_markdown = []
         if args.exclude_markdown_files:
             excluded_markdown = _unstage_markdown_files(repo_path)
 
-        staged_files = _run_process(["git", "diff", "--cached", "--name-only"], cwd=repo_path).stdout.strip()
+        staged_files = _run_process(
+            ["git", "diff", "--cached", "--name-only"], cwd=repo_path
+        ).stdout.strip()
         staged_list = [line.strip() for line in staged_files.splitlines() if line.strip()]
         staged_committable = _filter_committable_paths(
             staged_list, shared_hints, args.external_dependency_path_hints, submodule_paths
@@ -584,7 +618,10 @@ async def handle_create_repo_pr(arguments: dict, *, CreateRepoPrParams) -> list[
                     )
                 ]
             raise McpError(
-                ErrorData(code=INVALID_PARAMS, message="No staged changes found after staging step. Nothing to commit.")
+                ErrorData(
+                    code=INVALID_PARAMS,
+                    message="No staged changes found after staging step. Nothing to commit.",
+                )
             )
 
         if not staged_committable:
@@ -613,20 +650,31 @@ async def handle_create_repo_pr(arguments: dict, *, CreateRepoPrParams) -> list[
                     )
                 ]
             raise McpError(
-                ErrorData(code=INVALID_PARAMS, message="Only non-committable paths are staged. Nothing to PR.")
+                ErrorData(
+                    code=INVALID_PARAMS,
+                    message="Only non-committable paths are staged. Nothing to PR.",
+                )
             )
 
-        branch_name = _ensure_branch_for_pr(repo_path, args.branch_name, args.auto_create_branch, args.jira_id)
+        branch_name = _ensure_branch_for_pr(
+            repo_path, args.branch_name, args.auto_create_branch, args.jira_id
+        )
 
         _run_process(["git", "commit", "-m", args.commit_message], cwd=repo_path)
         _run_process(["git", "push", "-u", "origin", branch_name], cwd=repo_path)
 
         pr_cmd = [
-            "gh", "pr", "create",
-            "--base", args.base_branch,
-            "--head", branch_name,
-            "--title", args.pr_title,
-            "--body", _resolve_pr_body(repo_path, args),
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            args.base_branch,
+            "--head",
+            branch_name,
+            "--title",
+            args.pr_title,
+            "--body",
+            _resolve_pr_body(repo_path, args),
         ]
         if args.reviewer:
             pr_cmd.extend(["--reviewer", args.reviewer])
@@ -645,7 +693,7 @@ async def handle_create_repo_pr(arguments: dict, *, CreateRepoPrParams) -> list[
         if shared_patch_path:
             summary += f"\n- Shared patch also created: {shared_patch_path}\n- Shared paths detected: {len(shared_paths)}"
         if excluded_markdown:
-            summary += f"\n- Excluded markdown files:\n" + "\n".join(excluded_markdown)
+            summary += "\n- Excluded markdown files:\n" + "\n".join(excluded_markdown)
         return [TextContent(type="text", text=summary)]
     except subprocess.CalledProcessError as exc:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=_format_process_failure(exc)))

@@ -1,8 +1,5 @@
 """Tests for ServerConfig env-var loading."""
 
-import os
-import pytest
-
 from triagepilot.config import ServerConfig
 
 
