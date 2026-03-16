@@ -35,7 +35,7 @@ triagepilot = ["prompts/*.prompt.md"]
 dev = ["pytest>=8.4.0", "ruff>=0.9.0", "mypy>=1.14.0"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/triagepilot/tests"]
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py310"

@@ -26,7 +26,7 @@ python -m triagepilot                     # Alternative invocation
 pytest                                    # Run all tests
 pytest -xvs                              # Verbose, stop on first failure
 PYTHONPATH=src pytest -q                 # Quiet output
-pytest src/triagepilot/tests/test_backends.py  # Single test file
+pytest tests/test_backends.py                 # Single test file
 ```
 
 ### Building Example Crash Programs

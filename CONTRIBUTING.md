@@ -49,7 +49,7 @@ We use `ignore_missing_imports` since some dependencies lack type stubs.
 ```bash
 pytest                    # Run all tests
 pytest -xvs              # Verbose, stop on first failure
-pytest src/triagepilot/tests/test_backends.py  # Single file
+pytest tests/test_backends.py                  # Single file
 ```
 
 Most tests mock platform-specific debugger interactions and run on any OS. Integration tests that require real debuggers should be run on the appropriate platform.
@@ -61,7 +61,7 @@ See `CLAUDE.md` for detailed architecture documentation. Key directories:
 - `src/triagepilot/backends/` — Debugger adapters (CDB, GDB, LLDB)
 - `src/triagepilot/tools/` — MCP tool implementations
 - `src/triagepilot/graph/` — Optional LangGraph triage workflow
-- `src/triagepilot/tests/` — Test suite
+- `tests/` — Test suite
 
 ## Filing Issues
 
