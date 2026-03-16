@@ -828,9 +828,11 @@ async def handle_run_cmd(
     debugger_type: str = "auto",
     symbols_path: Optional[str],
     image_path: Optional[str],
+    repo_path: Optional[str] = None,  # accepted but not used — keeps **debugger_ctx passthrough clean
     timeout: int,
     verbose: bool,
     RunCommandParams,
+    **_extra,
 ) -> list[TextContent]:
     args = RunCommandParams(**arguments)
 

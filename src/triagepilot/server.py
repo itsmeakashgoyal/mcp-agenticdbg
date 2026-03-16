@@ -479,5 +479,8 @@ async def serve(
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(read_stream, write_stream, options, raise_exceptions=True)
-    except* anyio.BrokenResourceError:
-        pass
+    except (anyio.BrokenResourceError, Exception) as exc:
+        # Swallow broken-pipe errors that occur when the MCP client disconnects;
+        # re-raise anything unexpected.
+        if not isinstance(exc, anyio.BrokenResourceError):
+            raise

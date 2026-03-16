@@ -138,11 +138,15 @@ Provide technical details for developers to:
 - Implement appropriate fixes
 - Prevent similar issues
 
-## OPTIONAL POST-ANALYSIS DEVELOPMENT FLOW
-If the user explicitly asks for code changes after the dump analysis:
-1. Implement the requested code changes.
-2. Validate changes (run tests/build checks where possible).
-3. **Only if the user explicitly asks to raise a PR**, follow the MANDATORY TOOL SELECTION GATE below.
+## POST-ANALYSIS DEVELOPMENT FLOW
+
+**Code fixes are part of the required report (step 4).** When `repo_path` is provided and
+the faulting source is located, you MUST write the concrete fix directly in the source file —
+do not just describe it. Apply the minimal, correct change to address the root cause.
+
+After applying the fix:
+1. Validate changes (run tests/build checks where possible).
+2. **Only if the user explicitly asks to raise a PR**, follow the MANDATORY TOOL SELECTION GATE below.
 
 **Do not create commits or PRs automatically. PR creation must be user-requested explicitly.**
 

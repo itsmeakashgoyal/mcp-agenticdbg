@@ -20,6 +20,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <cstdint>
 #include "crashdump.h"
 
 typedef void (*CommandHandler)(const char *);

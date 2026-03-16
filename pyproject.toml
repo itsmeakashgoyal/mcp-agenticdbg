@@ -3,7 +3,7 @@ name = "triagepilot"
 version = "1.0.0"
 description = "MCP server supporting CDB (Windows), GDB (Linux), and LLDB (macOS)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10"  # 3.11+ recommended; 3.10 supported
 dependencies = [
     "mcp>=1.17.0",
     "pydantic>=2.12.0",
@@ -22,8 +22,11 @@ langgraph = [
 triagepilot = "triagepilot:main"
 
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.package-data]
 triagepilot = ["prompts/*.prompt.md"]
