@@ -173,7 +173,7 @@ def _extract_cdb_identity(text: str) -> tuple[str | None, str | None, str | None
 
 def _extract_gdb_lldb_identity(
     text: str,
-) -> tuple[str | None, str | None, str | None, str | None, int | None]:
+) -> tuple[str | None, str | None, str | None, int | None, str | None]:
     """Extract module, function, file, line from GDB/LLDB analysis."""
     # File/line from "at file:line"
     at_matches = _GDB_AT_RE.findall(text)

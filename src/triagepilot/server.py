@@ -521,20 +521,20 @@ async def serve(
                 return [TextContent(type="text", text=report)]
 
             elif name == "recall_similar_crashes" and memory_store is not None:
-                args = RecallSimilarParams(**arguments)
-                return await handle_recall_similar(args, memory_store)
+                recall_args = RecallSimilarParams(**arguments)
+                return await handle_recall_similar(recall_args, memory_store)
 
             elif name == "save_triage_result" and memory_store is not None:
-                args = SaveTriageParams(**arguments)
-                return await handle_save_triage(args, memory_store)
+                save_args = SaveTriageParams(**arguments)
+                return await handle_save_triage(save_args, memory_store)
 
             elif name == "list_known_patterns" and memory_store is not None:
-                args = ListPatternsParams(**arguments)
-                return await handle_list_patterns(args, memory_store)
+                list_args = ListPatternsParams(**arguments)
+                return await handle_list_patterns(list_args, memory_store)
 
             elif name == "forget_pattern" and memory_store is not None:
-                args = ForgetPatternParams(**arguments)
-                return await handle_forget_pattern(args, memory_store)
+                forget_args = ForgetPatternParams(**arguments)
+                return await handle_forget_pattern(forget_args, memory_store)
 
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Unknown tool: {name}"))
 
