@@ -276,5 +276,3 @@ class TestDumpFilePatterns:
     def test_gdb_core(self):
         patterns = _dump_file_patterns("gdb")
         assert "core.*" in patterns
-
-

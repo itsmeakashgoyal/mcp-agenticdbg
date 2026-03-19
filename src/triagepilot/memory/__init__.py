@@ -8,7 +8,12 @@ from .models import (
     TriageMemoryEntry,
     TriageRecallResult,
 )
-from .signature import compute_stack_hash, extract_auto_tags, extract_crash_signature, tokenize_for_search
+from .signature import (
+    compute_stack_hash,
+    extract_auto_tags,
+    extract_crash_signature,
+    tokenize_for_search,
+)
 from .store import MemoryStore
 from .tools import (
     auto_recall_similar,

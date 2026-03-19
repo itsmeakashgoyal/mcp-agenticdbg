@@ -159,7 +159,9 @@ def root_cause_node(state: dict) -> dict:
         if similar_cases:
             memory_ctx = "## Similar Past Crashes (from memory)\n"
             for i, case in enumerate(similar_cases, 1):
-                memory_ctx += f"\n### Past Case {i} (similarity: {case.get('similarity_score', 0):.0%})\n"
+                memory_ctx += (
+                    f"\n### Past Case {i} (similarity: {case.get('similarity_score', 0):.0%})\n"
+                )
                 if case.get("root_cause"):
                     memory_ctx += f"- **Root Cause:** {case['root_cause']}\n"
                 if case.get("fix_description"):
@@ -367,7 +369,12 @@ def memory_recall_node(state: dict) -> dict:
         return {"similar_cases": None}
 
     try:
-        from ..memory import MemoryStore, extract_crash_signature, compute_stack_hash, tokenize_for_search
+        from ..memory import (
+            MemoryStore,
+            compute_stack_hash,
+            extract_crash_signature,
+            tokenize_for_search,
+        )
 
         store = MemoryStore(db_path=memory_db_path)
         sig = extract_crash_signature(analyze_output)
@@ -387,15 +394,17 @@ def memory_recall_node(state: dict) -> dict:
 
         cases = []
         for r in results:
-            cases.append({
-                "signature": r.entry.crash_signature,
-                "root_cause": r.entry.root_cause,
-                "fix_description": r.entry.fix_description,
-                "fix_pr_url": r.entry.fix_pr_url,
-                "similarity_score": r.similarity_score,
-                "match_reasons": r.match_reasons,
-                "useful_commands": r.entry.debugger_commands_used,
-            })
+            cases.append(
+                {
+                    "signature": r.entry.crash_signature,
+                    "root_cause": r.entry.root_cause,
+                    "fix_description": r.entry.fix_description,
+                    "fix_pr_url": r.entry.fix_pr_url,
+                    "similarity_score": r.similarity_score,
+                    "match_reasons": r.match_reasons,
+                    "useful_commands": r.entry.debugger_commands_used,
+                }
+            )
 
         logger.info("memory_recall_node: found %d similar cases", len(cases))
         return {"similar_cases": cases}
@@ -413,7 +422,7 @@ def memory_save_node(state: dict) -> dict:
         return {}
 
     try:
-        from ..memory import auto_save_analysis, MemoryStore
+        from ..memory import MemoryStore, auto_save_analysis
 
         store = MemoryStore(db_path=memory_db_path)
 

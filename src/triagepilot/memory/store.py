@@ -189,10 +189,8 @@ class MemoryStore:
 
             row = _entry_to_row(entry)
             cols = ", ".join(row.keys())
-            placeholders = ", ".join(f":{k}" for k in row.keys())
-            self._conn.execute(
-                f"INSERT INTO triage_memory ({cols}) VALUES ({placeholders})", row
-            )
+            placeholders = ", ".join(f":{k}" for k in row)
+            self._conn.execute(f"INSERT INTO triage_memory ({cols}) VALUES ({placeholders})", row)
             # Update document frequencies for TF-IDF
             self._update_df(entry.tokens, increment=True)
             self._conn.commit()
@@ -217,9 +215,7 @@ class MemoryStore:
         row = cursor.fetchone()
         return _row_to_entry(row) if row else None
 
-    def _update_existing(
-        self, existing: TriageMemoryEntry, new: TriageMemoryEntry
-    ) -> None:
+    def _update_existing(self, existing: TriageMemoryEntry, new: TriageMemoryEntry) -> None:
         """Merge new data into an existing entry."""
         assert self._conn is not None
         now = datetime.now(timezone.utc).isoformat()
@@ -242,7 +238,9 @@ class MemoryStore:
         updates["tags"] = json.dumps(merged_tags)
 
         # Merge commands
-        merged_cmds = list(dict.fromkeys(existing.debugger_commands_used + new.debugger_commands_used))
+        merged_cmds = list(
+            dict.fromkeys(existing.debugger_commands_used + new.debugger_commands_used)
+        )
         updates["debugger_commands_used"] = json.dumps(merged_cmds)
 
         # Update tokens if new ones provided
@@ -258,9 +256,7 @@ class MemoryStore:
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [existing.id]
-        self._conn.execute(
-            f"UPDATE triage_memory SET {set_clause} WHERE id = ?", values
-        )
+        self._conn.execute(f"UPDATE triage_memory SET {set_clause} WHERE id = ?", values)
         self._conn.commit()
         logger.info("Updated existing triage memory: %s", existing.id)
 
@@ -312,9 +308,7 @@ class MemoryStore:
                 # Tier 2: stack hash
                 stack_score = 0.0
                 if query_stack_hash:
-                    stack_score, reason = score_stack_hash_match(
-                        query_stack_hash, entry.stack_hash
-                    )
+                    stack_score, reason = score_stack_hash_match(query_stack_hash, entry.stack_hash)
                     if reason:
                         reasons.append(reason)
 
@@ -463,9 +457,7 @@ class MemoryStore:
         """Delete a memory entry by ID. Returns True if deleted."""
         with self._lock:
             assert self._conn is not None
-            cursor = self._conn.execute(
-                "SELECT * FROM triage_memory WHERE id = ?", (pattern_id,)
-            )
+            cursor = self._conn.execute("SELECT * FROM triage_memory WHERE id = ?", (pattern_id,))
             row = cursor.fetchone()
             if not row:
                 return False
@@ -481,8 +473,7 @@ class MemoryStore:
         with self._lock:
             assert self._conn is not None
             cursor = self._conn.execute(
-                "SELECT * FROM triage_memory WHERE dump_path = ? "
-                "ORDER BY updated_at DESC LIMIT 1",
+                "SELECT * FROM triage_memory WHERE dump_path = ? ORDER BY updated_at DESC LIMIT 1",
                 (dump_path,),
             )
             row = cursor.fetchone()
@@ -493,8 +484,12 @@ class MemoryStore:
         with self._lock:
             assert self._conn is not None
             allowed = {
-                "root_cause", "fix_description", "fix_pr_url", "tags",
-                "debugger_commands_used", "confidence",
+                "root_cause",
+                "fix_description",
+                "fix_pr_url",
+                "tags",
+                "debugger_commands_used",
+                "confidence",
             }
             updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
             if not updates:
@@ -592,15 +587,9 @@ class MemoryStore:
             if count == 0:
                 return {"total_entries": 0}
 
-            oldest = self._conn.execute(
-                "SELECT MIN(created_at) FROM triage_memory"
-            ).fetchone()[0]
-            newest = self._conn.execute(
-                "SELECT MAX(created_at) FROM triage_memory"
-            ).fetchone()[0]
-            avg_conf = self._conn.execute(
-                "SELECT AVG(confidence) FROM triage_memory"
-            ).fetchone()[0]
+            oldest = self._conn.execute("SELECT MIN(created_at) FROM triage_memory").fetchone()[0]
+            newest = self._conn.execute("SELECT MAX(created_at) FROM triage_memory").fetchone()[0]
+            avg_conf = self._conn.execute("SELECT AVG(confidence) FROM triage_memory").fetchone()[0]
 
             # Top tags
             cursor = self._conn.execute("SELECT tags FROM triage_memory")

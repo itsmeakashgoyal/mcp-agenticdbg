@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from triagepilot.memory.models import TriageMemoryEntry, TriageRecallResult
+from triagepilot.memory.models import TriageMemoryEntry
 from triagepilot.memory.signature import (
-    CrashSignature,
     compute_stack_hash,
     extract_auto_tags,
     extract_crash_signature,
@@ -22,10 +20,8 @@ from triagepilot.memory.similarity import (
     cosine_similarity,
     score_signature_match,
     score_stack_hash_match,
-    score_tfidf_similarity,
 )
 from triagepilot.memory.store import MemoryStore
-
 
 # ===========================================================================
 # Fixtures
@@ -67,8 +63,20 @@ def sample_entry():
         raw_analysis_snippet="Program received signal SIGSEGV, Segmentation fault.\n"
         "0x0000555555555169 in process_data (buf=0x0) at src/data.cpp:42\n"
         "42\t    return buf->size;\n",
-        tokens=["program", "received", "signal", "sigsegv", "segmentation",
-                "fault", "process_data", "buf", "src", "data", "cpp", "size"],
+        tokens=[
+            "program",
+            "received",
+            "signal",
+            "sigsegv",
+            "segmentation",
+            "fault",
+            "process_data",
+            "buf",
+            "src",
+            "data",
+            "cpp",
+            "size",
+        ],
     )
 
 
@@ -345,9 +353,7 @@ class TestMemoryStore:
     def test_recall_by_tokens(self, store, sample_entry):
         store.save(sample_entry)
 
-        results = store.recall(
-            query_tokens=["sigsegv", "process_data", "segmentation"]
-        )
+        results = store.recall(query_tokens=["sigsegv", "process_data", "segmentation"])
         assert len(results) >= 1
 
     def test_recall_empty_store(self, store):
@@ -461,9 +467,7 @@ class TestMemoryTools:
 
         store.save(sample_entry)
 
-        args = RecallSimilarParams(
-            analysis_text="Program received signal SIGSEGV in process_data"
-        )
+        args = RecallSimilarParams(analysis_text="Program received signal SIGSEGV in process_data")
         results = await handle_recall_similar(args, store)
         assert len(results) == 1
         assert "Similar Past Crashes" in results[0].text or "No similar" in results[0].text
@@ -559,9 +563,7 @@ class TestAutoSaveRecall:
 
         store.save(sample_entry)
 
-        analysis = (
-            "Program received signal SIGSEGV in process_data at src/data.cpp:42"
-        )
+        analysis = "Program received signal SIGSEGV in process_data at src/data.cpp:42"
         result = auto_recall_similar(store, analysis)
         # May or may not find matches depending on token overlap
         assert isinstance(result, str)

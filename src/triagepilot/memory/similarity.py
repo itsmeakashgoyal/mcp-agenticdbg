@@ -149,9 +149,5 @@ def compute_overall_score(
 
     The result is multiplied by the entry's confidence (which decays over time).
     """
-    raw = (
-        sig_score * TIER1_WEIGHT
-        + stack_score * TIER2_WEIGHT
-        + tfidf_score * TIER3_WEIGHT
-    )
+    raw = sig_score * TIER1_WEIGHT + stack_score * TIER2_WEIGHT + tfidf_score * TIER3_WEIGHT
     return raw * confidence

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from mcp.types import TextContent
 
@@ -116,9 +115,7 @@ async def handle_recall_similar(
         if not query_sig:
             query_sig = sig.normalized()
         query_stack_hash = compute_stack_hash(args.analysis_text)
-        query_tokens = tokenize_for_search(
-            args.analysis_text, sig.faulting_file, args.tags
-        )
+        query_tokens = tokenize_for_search(args.analysis_text, sig.faulting_file, args.tags)
     elif args.tags:
         query_tokens = [t.lower() for t in args.tags]
 
@@ -159,9 +156,7 @@ async def handle_save_triage(
             updates["tags"] = merged_tags
         if args.debugger_commands_used:
             merged_cmds = list(
-                dict.fromkeys(
-                    existing.debugger_commands_used + args.debugger_commands_used
-                )
+                dict.fromkeys(existing.debugger_commands_used + args.debugger_commands_used)
             )
             updates["debugger_commands_used"] = merged_cmds
 
@@ -217,9 +212,10 @@ async def handle_list_patterns(
         lines.append(f"**{i}.** {_format_entry_summary(entry)}\n")
 
     if stats.get("top_tags"):
-        lines.append("**Top tags:** " + ", ".join(
-            f"`{tag}` ({count})" for tag, count in stats["top_tags"].items()
-        ))
+        lines.append(
+            "**Top tags:** "
+            + ", ".join(f"`{tag}` ({count})" for tag, count in stats["top_tags"].items())
+        )
 
     return [TextContent(type="text", text="\n".join(lines) + "\n")]
 

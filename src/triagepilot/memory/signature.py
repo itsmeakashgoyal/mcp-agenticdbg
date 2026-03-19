@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Regex patterns (mirrored from debugger_tools.py for decoupling)
@@ -313,10 +313,42 @@ def tokenize_for_search(
     """
     _STOPWORDS = frozenset(
         {
-            "the", "a", "an", "is", "at", "in", "on", "of", "to", "for",
-            "and", "or", "not", "with", "from", "by", "as", "this", "that",
-            "it", "be", "are", "was", "were", "been", "has", "have", "had",
-            "no", "do", "does", "did", "will", "can", "could", "should",
+            "the",
+            "a",
+            "an",
+            "is",
+            "at",
+            "in",
+            "on",
+            "of",
+            "to",
+            "for",
+            "and",
+            "or",
+            "not",
+            "with",
+            "from",
+            "by",
+            "as",
+            "this",
+            "that",
+            "it",
+            "be",
+            "are",
+            "was",
+            "were",
+            "been",
+            "has",
+            "have",
+            "had",
+            "no",
+            "do",
+            "does",
+            "did",
+            "will",
+            "can",
+            "could",
+            "should",
         }
     )
 
@@ -368,10 +400,19 @@ def extract_auto_tags(
     if faulting_file:
         ext = faulting_file.rsplit(".", 1)[-1].lower() if "." in faulting_file else None
         lang_map = {
-            "c": "c", "cpp": "c++", "cc": "c++", "cxx": "c++",
-            "h": "c/c++", "hpp": "c++", "hxx": "c++",
-            "rs": "rust", "go": "go", "swift": "swift",
-            "m": "objc", "mm": "objc++", "py": "python",
+            "c": "c",
+            "cpp": "c++",
+            "cc": "c++",
+            "cxx": "c++",
+            "h": "c/c++",
+            "hpp": "c++",
+            "hxx": "c++",
+            "rs": "rust",
+            "go": "go",
+            "swift": "swift",
+            "m": "objc",
+            "mm": "objc++",
+            "py": "python",
         }
         if ext and ext in lang_map:
             tags.append(f"lang:{lang_map[ext]}")
