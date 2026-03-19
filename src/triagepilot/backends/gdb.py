@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -1182,6 +1183,13 @@ class GDBSession(DebuggerSession):
             for cmd in initial_commands:
                 if cmd:
                     self.send_command(cmd)
+
+    def send_break(self) -> bool:
+        """Send SIGINT to the GDB process to interrupt execution."""
+        if self.process and self.process.poll() is None:
+            self.process.send_signal(signal.SIGINT)
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Lifecycle

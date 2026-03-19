@@ -126,6 +126,15 @@ class DebuggerSession(ABC):
         """Return a human-readable name for this backend (e.g. 'CDB', 'LLDB', 'GDB')."""
         ...
 
+    def send_break(self) -> bool:
+        """Send an interrupt/break signal to the debugger process.
+
+        Returns ``True`` if the signal was sent, ``False`` if the process is
+        not running.  Backends that do not support interruption raise
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(f"{self.backend_name()} does not support send_break")
+
     def __enter__(self):
         return self
 

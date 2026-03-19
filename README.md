@@ -27,7 +27,10 @@ Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler th
 ## Quick Start
 
 ```bash
-# Install
+# Install (uv — recommended)
+uv sync
+
+# Or with pip
 pip install -e .
 
 # Verify
@@ -71,12 +74,16 @@ TriagePilot MCP Server
 ```bash
 git clone https://github.com/itsmeakashgoyal/mcp-agenticdbg.git
 cd mcp-agenticdbg
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
-pip install -e .
 
-# Optional: autonomous triage via LangGraph
-pip install -e ".[langgraph]"
+# Using uv (recommended — fast, locked dependencies)
+uv sync                          # Core deps + dev tools
+uv sync --extra langgraph        # Optional: autonomous triage via LangGraph
+
+# Or using pip
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
+pip install -e .
+pip install -e ".[langgraph]"    # Optional: LangGraph support
 ```
 
 ## Configuration
@@ -122,11 +129,16 @@ Config file locations: `.cursor/mcp.json` (Cursor) or `.vscode/mcp.json` (VS Cod
 | `analyze_dump` | One-shot crash analysis with stack/modules/threads/source lookup |
 | `open_dump` | Open dump and initialize analysis session |
 | `run_debugger_cmd` | Execute debugger command on active session |
+| `send_ctrl_break` | Interrupt a running debugger command (CTRL+BREAK / SIGINT) |
 | `close_dump` | Close active dump session |
 | `list_dumps` | Discover dump files from platform-aware paths |
 | `create_repo_pr` | Create commit + branch + push + GitHub PR |
 | `create_shared_patch` | Generate markdown patch plan for shared/gitignored paths |
 | `auto_triage_dump` | Autonomous end-to-end triage (requires `langgraph` extra) |
+| `recall_similar_crashes` | Search memory for similar past crash analyses |
+| `save_triage_result` | Save root cause and fix to persistent memory |
+| `list_known_patterns` | Browse stored crash patterns |
+| `forget_pattern` | Delete a memory entry by ID |
 
 ## CLI Options
 

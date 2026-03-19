@@ -53,6 +53,9 @@ coverage.xml
 .mypy_cache/
 .pytype/
 
+# Linting
+.ruff_cache/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -63,6 +66,8 @@ ehthumbs.db
 *.dmp
 *.mdmp
 *.hdmp
+*.kdmp
+*.cab
 *.crash
 core
 core.*
@@ -98,6 +103,12 @@ examples/**/*.lib
 
 # Cursor / AI assistant
 .cursor/
+.claude/
 agent-transcripts/
 mcps/
 terminals/
+
+# Memory database (runtime, user-specific)
+*.db
+*.db-journal
+~/.triagepilot/

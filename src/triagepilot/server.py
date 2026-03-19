@@ -33,6 +33,7 @@ from .tools import (
     handle_list_dumps,
     handle_open_dump,
     handle_run_cmd,
+    handle_send_break,
 )
 from .tools.debugger_tools import (
     cleanup_all_sessions,
@@ -50,6 +51,23 @@ try:
     _LANGGRAPH_AVAILABLE = True
 except ImportError:
     _LANGGRAPH_AVAILABLE = False
+
+try:
+    from .memory import (
+        ForgetPatternParams,
+        ListPatternsParams,
+        MemoryStore,
+        RecallSimilarParams,
+        SaveTriageParams,
+        handle_forget_pattern,
+        handle_list_patterns,
+        handle_recall_similar,
+        handle_save_triage,
+    )
+
+    _MEMORY_AVAILABLE = True
+except ImportError:
+    _MEMORY_AVAILABLE = False
 
 
 # ============================================================================
@@ -108,6 +126,12 @@ class CloseDumpParams(BaseModel):
     """Parameters for closing a dump session."""
 
     dump_path: str = Field(description="Path to the crash dump file to close")
+
+
+class SendBreakParams(BaseModel):
+    """Parameters for sending a break/interrupt signal to a debugger session."""
+
+    dump_path: str = Field(description="Path to the crash dump file whose session to interrupt")
 
 
 class ListDumpsParams(BaseModel):
@@ -280,6 +304,22 @@ async def serve(
         verbose = config.verbose
         set_max_concurrent_sessions(config.max_concurrent_sessions)
 
+    # Initialize persistent memory store
+    memory_store = None
+    if _MEMORY_AVAILABLE and (config is None or config.memory_enabled):
+        try:
+            db_path = config.memory_db_path if config else None
+            memory_store = MemoryStore(db_path=db_path)
+            # Run maintenance on startup
+            half_life = config.memory_confidence_half_life_days if config else 90.0
+            max_entries = config.memory_max_entries if config else 10000
+            memory_store.decay_confidence(half_life_days=half_life)
+            memory_store.prune(max_entries=max_entries)
+            logger.info("Memory store initialized: %s", memory_store.db_path)
+        except Exception:
+            logger.warning("Failed to initialize memory store", exc_info=True)
+            memory_store = None
+
     server = Server("triagepilot")
 
     # -------------------------------------------------------------------------
@@ -310,6 +350,11 @@ async def serve(
                 inputSchema=CloseDumpParams.model_json_schema(),
             ),
             Tool(
+                name="send_ctrl_break",
+                description="Send a break/interrupt signal (CTRL+BREAK) to an active debugger session to stop a running command.",
+                inputSchema=SendBreakParams.model_json_schema(),
+            ),
+            Tool(
                 name="list_dumps",
                 description="List crash dump files in a directory. Detects platform-appropriate file types.",
                 inputSchema=ListDumpsParams.model_json_schema(),
@@ -337,6 +382,37 @@ async def serve(
                     inputSchema=AutoTriageParams.model_json_schema(),
                 )
             )
+        if memory_store is not None:
+            tools.extend(
+                [
+                    Tool(
+                        name="recall_similar_crashes",
+                        description=(
+                            "Search persistent memory for similar past crash analyses. "
+                            "Provide analysis text, crash signature, or tags to find matches."
+                        ),
+                        inputSchema=RecallSimilarParams.model_json_schema(),
+                    ),
+                    Tool(
+                        name="save_triage_result",
+                        description=(
+                            "Save or update a crash triage result with root cause, fix description, "
+                            "and useful debugger commands. Builds institutional knowledge over time."
+                        ),
+                        inputSchema=SaveTriageParams.model_json_schema(),
+                    ),
+                    Tool(
+                        name="list_known_patterns",
+                        description="List stored crash patterns from memory, optionally filtered by tag.",
+                        inputSchema=ListPatternsParams.model_json_schema(),
+                    ),
+                    Tool(
+                        name="forget_pattern",
+                        description="Delete a specific crash pattern from memory by ID.",
+                        inputSchema=ForgetPatternParams.model_json_schema(),
+                    ),
+                ]
+            )
         return tools
 
     @server.call_tool()
@@ -354,6 +430,9 @@ async def serve(
                     timeout=timeout,
                     verbose=verbose,
                     AnalyzeDumpParams=AnalyzeDumpParams,
+                    memory_store=memory_store,
+                    memory_auto_recall=config.memory_auto_recall if config else True,
+                    memory_auto_save=config.memory_auto_save if config else True,
                 )
 
             elif name in ("open_dump", "open_windbg_dump"):
@@ -386,6 +465,9 @@ async def serve(
 
             elif name in ("close_dump", "close_windbg_dump"):
                 return await handle_close_dump(arguments, CloseDumpParams=CloseDumpParams)
+
+            elif name == "send_ctrl_break":
+                return await handle_send_break(arguments, SendBreakParams=SendBreakParams)
 
             elif name in ("list_dumps", "list_windbg_dumps"):
                 return await handle_list_dumps(
@@ -422,6 +504,7 @@ async def serve(
                     "retry_count": 0,
                     "errors": [],
                     "status": "analyzing",
+                    "memory_db_path": memory_store.db_path if memory_store else None,
                 }
 
                 if include_llm and config is not None:
@@ -436,6 +519,22 @@ async def serve(
                 final_state = await asyncio.to_thread(graph.invoke, initial_state)
                 report = final_state.get("report", "No report generated.")
                 return [TextContent(type="text", text=report)]
+
+            elif name == "recall_similar_crashes" and memory_store is not None:
+                recall_args = RecallSimilarParams(**arguments)
+                return await handle_recall_similar(recall_args, memory_store)
+
+            elif name == "save_triage_result" and memory_store is not None:
+                save_args = SaveTriageParams(**arguments)
+                return await handle_save_triage(save_args, memory_store)
+
+            elif name == "list_known_patterns" and memory_store is not None:
+                list_args = ListPatternsParams(**arguments)
+                return await handle_list_patterns(list_args, memory_store)
+
+            elif name == "forget_pattern" and memory_store is not None:
+                forget_args = ForgetPatternParams(**arguments)
+                return await handle_forget_pattern(forget_args, memory_store)
 
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"Unknown tool: {name}"))
 
