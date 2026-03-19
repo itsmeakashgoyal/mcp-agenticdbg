@@ -4,7 +4,9 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -583,6 +585,21 @@ class CDBSession(DebuggerSession):
                 raise CDBError(
                     f"Command exceeded max wall-clock time ({_MAX_WALL_CLOCK_S}s): {command}"
                 )
+
+    def send_break(self) -> bool:
+        """Send a break/interrupt signal to the CDB process."""
+        if self.process and self.process.poll() is None:
+            if sys.platform == "win32":
+                # On Windows, send CTRL_BREAK_EVENT to the CDB console group
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                # CTRL_BREAK_EVENT = 1
+                kernel32.GenerateConsoleCtrlEvent(1, self.process.pid)
+            else:
+                self.process.send_signal(signal.SIGINT)
+            return True
+        return False
 
     def shutdown(self):
         try:

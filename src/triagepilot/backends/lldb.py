@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -466,6 +467,13 @@ class LLDBSession(DebuggerSession):
                     continue
                 cleaned.append(line)
             return cleaned
+
+    def send_break(self) -> bool:
+        """Send SIGINT to the LLDB process to interrupt execution."""
+        if self.process and self.process.poll() is None:
+            self.process.send_signal(signal.SIGINT)
+            return True
+        return False
 
     def shutdown(self):
         try:

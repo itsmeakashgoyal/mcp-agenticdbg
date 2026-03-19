@@ -5,23 +5,24 @@ Thanks for your interest in contributing! This guide will help you get started.
 ## Getting Started
 
 ```bash
-git clone https://github.com/AkashGoyal/mcp-agenticdbg.git
+git clone https://github.com/itsmeakashgoyal/mcp-agenticdbg.git
 cd mcp-agenticdbg
-pip install -e ".[langgraph]"
 ```
 
 ## Development Setup
 
-Install dev dependencies:
+Using **uv** (recommended):
 
 ```bash
-pip install ruff mypy pytest
+uv sync                          # Install core + dev deps (locked)
+uv sync --extra langgraph        # Include optional LangGraph support
 ```
 
-Or using dependency groups:
+Using pip (fallback):
 
 ```bash
-pip install --dependency-groups dev -e ".[langgraph]"
+pip install -e ".[langgraph]"
+pip install ruff mypy pytest
 ```
 
 ## Code Style
@@ -29,9 +30,9 @@ pip install --dependency-groups dev -e ".[langgraph]"
 We use [ruff](https://docs.astral.sh/ruff/) for linting and formatting. Run before committing:
 
 ```bash
-ruff check src/           # Lint
-ruff check --fix src/     # Lint with auto-fix
-ruff format src/          # Format
+uv run ruff check src/           # Lint
+uv run ruff check --fix src/     # Lint with auto-fix
+uv run ruff format src/          # Format
 ```
 
 Configuration is in `pyproject.toml`. Key settings: Python 3.10 target, 100 char line length.
@@ -39,7 +40,7 @@ Configuration is in `pyproject.toml`. Key settings: Python 3.10 target, 100 char
 ## Type Checking
 
 ```bash
-mypy src/triagepilot/
+uv run mypy src/triagepilot/
 ```
 
 We use `ignore_missing_imports` since some dependencies lack type stubs.
@@ -47,9 +48,9 @@ We use `ignore_missing_imports` since some dependencies lack type stubs.
 ## Running Tests
 
 ```bash
-pytest                    # Run all tests
-pytest -xvs              # Verbose, stop on first failure
-pytest tests/test_backends.py                  # Single file
+uv run pytest                    # Run all tests
+uv run pytest -xvs               # Verbose, stop on first failure
+uv run pytest tests/test_backends.py  # Single file
 ```
 
 Most tests mock platform-specific debugger interactions and run on any OS. Integration tests that require real debuggers should be run on the appropriate platform.
@@ -101,10 +102,10 @@ The DCO check runs automatically on all PRs and must pass before merging.
 2. Make your changes
 3. Ensure all checks pass locally:
    ```bash
-   ruff check src/
-   ruff format --check src/
-   mypy src/triagepilot/
-   pytest
+   uv run ruff check src/
+   uv run ruff format --check src/
+   uv run mypy src/triagepilot/
+   uv run pytest
    ```
 4. Fill in the PR template
 5. Submit your PR — CI will run lint, type-check, and tests automatically

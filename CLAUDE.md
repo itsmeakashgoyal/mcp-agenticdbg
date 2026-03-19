@@ -8,7 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-### Installation
+### Installation (uv — recommended)
+```bash
+uv sync                                  # Install core deps + dev tools (locked)
+uv sync --extra langgraph                # Include optional LangGraph support
+```
+
+### Installation (pip — fallback)
 ```bash
 pip install -e .                          # Install in editable mode (core deps only)
 pip install -e ".[langgraph]"            # Install with optional LangGraph support
@@ -16,17 +22,24 @@ pip install -e ".[langgraph]"            # Install with optional LangGraph suppo
 
 ### Running the MCP Server
 ```bash
-triagepilot                               # Run with defaults
-triagepilot --debugger gdb --repo-path /path/to/repo
+uv run triagepilot                        # Run with defaults (via uv)
+uv run triagepilot --debugger gdb --repo-path /path/to/repo
+triagepilot                               # Run directly (if installed)
 python -m triagepilot                     # Alternative invocation
 ```
 
 ### Running Tests
 ```bash
-pytest                                    # Run all tests
-pytest -xvs                              # Verbose, stop on first failure
-PYTHONPATH=src pytest -q                 # Quiet output
-pytest tests/test_backends.py                 # Single test file
+uv run pytest                            # Run all tests
+uv run pytest -xvs                       # Verbose, stop on first failure
+uv run pytest tests/test_backends.py     # Single test file
+```
+
+### Linting and Type Checking
+```bash
+uv run ruff check src/                   # Lint
+uv run ruff format src/                  # Format
+uv run mypy src/                         # Type check (graph.* and backends/cdb are excluded)
 ```
 
 ### Building Example Crash Programs
@@ -45,7 +58,8 @@ MCP Protocol (stdio)
     └── server.py             # Tool/prompt endpoints, Pydantic parameter models
          ├── tools/           # Tool implementations
          │    ├── debugger_tools.py   # Session pooling, crash analysis, source localization
-         │    └── git_tools.py        # Git workflows, PR/patch creation
+         │    ├── git_tools.py        # Git workflows, PR/patch creation
+         │    └── windbg_tools.py     # Deprecated re-export shim → debugger_tools.py
          ├── backends/        # Platform-specific debugger adapters
          │    ├── base.py     # Abstract DebuggerSession interface
          │    ├── cdb.py      # Windows CDB/WinDbg
@@ -109,8 +123,9 @@ All settings configurable via environment variables (`TRIAGEPILOT_` prefix) or C
 - `debugger_type`: auto-detected or explicit (cdb/gdb/lldb)
 - `debugger_path`: path to debugger binary
 - `symbols_path`, `image_path`, `repo_path`
-- `session_timeout`, `max_sessions`
-- `llm_model`, `llm_api_key` (for LangGraph mode)
+- `timeout`, `max_concurrent_sessions`
+- `llm_provider` (default: openai), `llm_model`, `llm_api_key` (for LangGraph mode)
+- `langsmith_api_key`, `langsmith_project` (optional LangSmith tracing)
 - `memory_enabled`, `memory_db_path`, `memory_max_entries`, `memory_confidence_half_life_days`
 - `memory_auto_recall`, `memory_auto_save`
 

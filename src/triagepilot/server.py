@@ -33,6 +33,7 @@ from .tools import (
     handle_list_dumps,
     handle_open_dump,
     handle_run_cmd,
+    handle_send_break,
 )
 from .tools.debugger_tools import (
     cleanup_all_sessions,
@@ -125,6 +126,12 @@ class CloseDumpParams(BaseModel):
     """Parameters for closing a dump session."""
 
     dump_path: str = Field(description="Path to the crash dump file to close")
+
+
+class SendBreakParams(BaseModel):
+    """Parameters for sending a break/interrupt signal to a debugger session."""
+
+    dump_path: str = Field(description="Path to the crash dump file whose session to interrupt")
 
 
 class ListDumpsParams(BaseModel):
@@ -343,6 +350,11 @@ async def serve(
                 inputSchema=CloseDumpParams.model_json_schema(),
             ),
             Tool(
+                name="send_ctrl_break",
+                description="Send a break/interrupt signal (CTRL+BREAK) to an active debugger session to stop a running command.",
+                inputSchema=SendBreakParams.model_json_schema(),
+            ),
+            Tool(
                 name="list_dumps",
                 description="List crash dump files in a directory. Detects platform-appropriate file types.",
                 inputSchema=ListDumpsParams.model_json_schema(),
@@ -453,6 +465,9 @@ async def serve(
 
             elif name in ("close_dump", "close_windbg_dump"):
                 return await handle_close_dump(arguments, CloseDumpParams=CloseDumpParams)
+
+            elif name == "send_ctrl_break":
+                return await handle_send_break(arguments, SendBreakParams=SendBreakParams)
 
             elif name in ("list_dumps", "list_windbg_dumps"):
                 return await handle_list_dumps(

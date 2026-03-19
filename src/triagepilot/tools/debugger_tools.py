@@ -143,7 +143,9 @@ def _dump_file_patterns(debugger_type: str = "auto") -> list[str]:
     if debugger_type == "auto":
         debugger_type = detect_debugger_type()
     if debugger_type == "cdb":
-        return ["*.*dmp"]
+        # *.*dmp matches .dmp, .mdmp (minidump), .hdmp (heap dump), .kdmp (kernel dump)
+        # *.cab matches Windows Error Reporting compressed dumps
+        return ["*.*dmp", "*.cab"]
     elif debugger_type == "lldb" and sys.platform == "darwin":
         return ["*.crash", "*.ips", "core.*", "*.core", "core"]
     else:
@@ -623,8 +625,9 @@ def _evict_lru_session() -> None:
         if oldest_session is not None:
             oldest_session.shutdown()
     except Exception:
-        pass
-    del active_sessions[oldest_id]
+        logger.warning("Error shutting down session %s during eviction", oldest_id, exc_info=True)
+    finally:
+        active_sessions.pop(oldest_id, None)
 
 
 def get_or_create_session(
@@ -715,13 +718,15 @@ def close_session(dump_path: str) -> bool:
 
 
 def cleanup_all_sessions() -> None:
-    for session in active_sessions.values():
-        try:
-            if session is not None:
+    for session_id in list(active_sessions):
+        session = active_sessions.pop(session_id, None)
+        if session is not None:
+            try:
                 session.shutdown()
-        except Exception:
-            pass
-    active_sessions.clear()
+            except Exception:
+                logger.warning(
+                    "Error shutting down session %s during cleanup", session_id, exc_info=True
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -867,8 +872,10 @@ async def handle_analyze_dump(
                 import sys
 
                 platform = (
-                    "windows" if sys.platform == "win32"
-                    else "macos" if sys.platform == "darwin"
+                    "windows"
+                    if sys.platform == "win32"
+                    else "macos"
+                    if sys.platform == "darwin"
                     else "linux"
                 )
                 auto_save_analysis(
@@ -974,6 +981,24 @@ async def handle_close_dump(arguments: dict, *, CloseDumpParams) -> list[TextCon
     args = CloseDumpParams(**arguments)
     success = await asyncio.to_thread(close_session, dump_path=args.dump_path)
     msg = f"Closed: {args.dump_path}" if success else f"No active session: {args.dump_path}"
+    return [TextContent(type="text", text=msg)]
+
+
+async def handle_send_break(arguments: dict, *, SendBreakParams) -> list[TextContent]:
+    """Send a break/interrupt signal to an active debugger session."""
+    args = SendBreakParams(**arguments)
+    session_id = os.path.abspath(args.dump_path)
+    with _session_lock:
+        session = active_sessions.get(session_id)
+    if session is None:
+        raise McpError(
+            ErrorData(code=INVALID_PARAMS, message=f"No active session: {args.dump_path}")
+        )
+    sent = await asyncio.to_thread(session.send_break)
+    if sent:
+        msg = f"Break signal sent to {session.backend_name()} session for {args.dump_path}"
+    else:
+        msg = f"Session process not running: {args.dump_path}"
     return [TextContent(type="text", text=msg)]
 
 
