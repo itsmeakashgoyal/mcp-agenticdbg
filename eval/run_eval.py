@@ -89,6 +89,13 @@ class ExampleResult:
     error: str | None = None
     matched_function: str | None = None
     diagnostic: str | None = None
+    # Raw crash_info+analysis text, kept only when a reproduced crash scored
+    # under 100% -- otherwise a signal/frame/source miss is a dead end to
+    # debug: was it a debugger-output-format change on this platform/OS
+    # version (see eval/README.md's ESR_EC/abort-backtrace findings), a
+    # genuinely wrong result, or something else? Bounded the same way
+    # non-reproduction diagnostics are.
+    mismatch_diagnostic: str | None = None
 
     @property
     def score(self) -> float | None:
@@ -196,6 +203,20 @@ def _tail(text: str | None) -> str | None:
     if not text:
         return text
     return text if len(text) <= _DIAGNOSTIC_TAIL_CHARS else "..." + text[-_DIAGNOSTIC_TAIL_CHARS:]
+
+
+# Number of leading characters of crash_info+analysis kept for a
+# signal/frame/source mismatch diagnostic. Unlike _tail() above, the
+# interesting part here (stop-reason line, backtrace) is at the *start* of
+# the debugger's own output -- the verbose "Registers" section is last and
+# is what a length bound should cut off, not the part that actually matters.
+_MISMATCH_HEAD_CHARS = 3000
+
+
+def _head(text: str | None) -> str | None:
+    if not text:
+        return text
+    return text if len(text) <= _MISMATCH_HEAD_CHARS else text[:_MISMATCH_HEAD_CHARS] + "..."
 
 
 def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
@@ -444,6 +465,9 @@ def evaluate_example(
         if source_section and entry.expected_file in source_section:
             result.source_match = True
 
+        if not (result.signal_match and result.frame_match and result.source_match):
+            result.mismatch_diagnostic = _head(combined)
+
         return result
     except Exception as exc:  # noqa: BLE001 -- report, don't crash the whole eval run
         result.error = f"{type(exc).__name__}: {exc}"
@@ -500,6 +524,30 @@ def render_results_md(results: list[ExampleResult], debugger_type: str) -> str:
                     "  </details>",
                     "",
                 ]
+
+    mismatches = [r for r in reproduced if r.mismatch_diagnostic]
+    if mismatches:
+        lines += ["", "## Signal/frame/source mismatches", ""]
+        for r in mismatches:
+            missed = [
+                name
+                for name, ok in (
+                    ("signal", r.signal_match),
+                    ("frame", r.frame_match),
+                    ("source", r.source_match),
+                )
+                if not ok
+            ]
+            lines.append(f"- `{r.entry.name}`: missed {', '.join(missed)}")
+            lines += [
+                "  <details><summary>crash_info + analysis</summary>",
+                "",
+                "  ```",
+                *(f"  {line}" for line in r.mismatch_diagnostic.splitlines()),
+                "  ```",
+                "  </details>",
+                "",
+            ]
 
     return "\n".join(lines) + "\n"
 
