@@ -19,7 +19,9 @@ judged LLM-quality eval is a natural follow-up once this layer is trusted.
 ## What's scored
 
 For each of the 17 example crashes under `examples/common/`, per
-`ground_truth.py`:
+`ground_truth.py` (minus any examples `run_eval.py`'s `_PLATFORM_EXCLUSIONS`
+skips on the current platform -- see "macOS and Windows crash capture"
+below):
 
 1. **Signal match** -- did the reported/observed signal match the expected
    one (`SIGSEGV`, `SIGABRT`, ...)?
@@ -128,19 +130,76 @@ output (crashdump.h's prints, or a bare exit code if nothing printed) in
 block, so findings like the ones below were root-caused from the CI
 artifact, not guessed at.
 
-### macOS: 14/17 (root-caused)
+### macOS: was 14/17 at 64%, now 16/16 at 100%
 
-`heap-metadata-corruption`, `thread-uaf`, and `iterator-invalidation` all
-ran to completion with exit status 0 -- no crash at all, confirmed from
-each one's captured output. All three rely on a freed allocation being
-reused (or at least still faulting when touched through the stale
-pointer) rather than sitting untouched in a per-size-class free list; that
-behavior is allocator-specific and doesn't hold on macOS's libmalloc the
-way it does on glibc (`heap-metadata-corruption` additionally calls
-glibc's `malloc_usable_size()` directly, which doesn't exist on macOS at
-all). Not a TriagePilot bug or a harness bug -- the same category of
-example-program determinism the aarch64 findings above already document,
-just on a different allocator.
+Root-caused directly on real macOS hardware (arm64, macOS 15.7) -- two
+separate, unrelated bugs were dragging the score down, not one:
+
+**1. Two examples never crashed at all.** `heap-metadata-corruption`,
+`thread-uaf`, and `iterator-invalidation` all ran to completion with exit
+status 0, confirmed from each one's captured output. All three rely on a
+freed allocation being reused (or at least still faulting when touched
+through the stale pointer) rather than sitting untouched in a
+per-size-class free list; that behavior is allocator-specific and doesn't
+hold on macOS's libmalloc the way it does on glibc.
+
+- `thread-uaf` and `iterator-invalidation` are fixed: `Session` (thread-uaf)
+  now defines its own `operator new`/`operator delete` backed directly by
+  `mmap()`/`munmap()`, and `MetricsBuffer`'s `std::vector<Sample>`
+  (iterator-invalidation) now uses a custom `DirectMapAllocator` backed by
+  `mmap`/`VirtualAlloc`, bypassing the platform malloc's heuristics
+  entirely. A first mmap/munmap-only version of the allocator *still*
+  didn't reproduce reliably for iterator-invalidation -- allocation-address
+  tracing showed the kernel handing the just-freed address straight back
+  out to the next similarly-sized `mmap()` a couple of vector growths
+  later, silently making the stale pointer valid again. Remapping the
+  freed range `PROT_NONE` (Windows: `MEM_DECOMMIT`) instead of releasing it
+  keeps the address permanently reserved so it can never be reused.
+  Confirmed 10/10 (thread-uaf) and 15/15 (iterator-invalidation) direct
+  runs; see `ground_truth.py` notes for each.
+- `heap-metadata-corruption` is excluded from the eval on macOS entirely
+  (`run_eval.py`'s `_PLATFORM_EXCLUSIONS`) rather than left as a
+  non-reproduction, since it's believed unfixable without deep,
+  version-fragile reverse-engineering of libmalloc's internal chunk
+  layout: the technique needs `conn_record` to sit immediately *after*
+  `buf` in memory so stomping `buf`'s computed usable-size offset lands on
+  `conn_record`'s own header. Tested directly: on this macOS allocator,
+  the two allocations don't even land in that relative order
+  (`conn_record` was allocated **before** `buf`, at a lower address) --
+  the whole technique's premise doesn't hold, unlike the glibc case it was
+  designed around. The 16 remaining examples are all run and all
+  reproduce.
+
+**2. Every reproduced crash was scored "signal MISS."** Even before fixing
+the above, all 14 previously-reproducing examples showed the correct frame
+and source but a mismatched signal (`64%` aggregate is almost exactly the
+2/3 you'd get from frame+source matching with signal always missing).
+Root cause: lldb's `debugserver` on Apple Silicon reports the raw AArch64
+`ESR_EL1.EC` hardware exception class as the stop reason (e.g.
+`ESR_EC_DABORT_EL0`) instead of `EXC_BAD_ACCESS`/`signal SIGSEGV` the way
+x86_64 lldb does, and a signal-delivered abort (`SIGABRT` via `abort()`)
+carries *no* stop-reason at all when lldb loads a saved core file rather
+than live-attaching -- confirmed empirically that a genuine `SIGSEGV` and
+a genuine `SIGBUS` both report the identical `ESR_EC_DABORT_EL0`, and a
+`double-free` core's `process status` just says "Process 0 stopped" with
+nothing after it, even though the backtrace clearly shows the `abort()` /
+`malloc_zone_error` / `free_tiny_botch` chain. Fixed in
+`memory/signature.py`'s `_extract_exception_type()`: known `ESR_EC_*`
+classes now map to the equivalent POSIX signal, and an unmatched abort
+backtrace (`` `abort +`` frame) falls back to `SIGABRT`. Separately, the
+eval harness itself (`run_eval.py`) was scoring signal match against a
+raw substring search over debugger text rather than calling
+`extract_crash_signature()` -- the function this eval is actually meant to
+be grading -- so the fix above didn't move the score until that was
+corrected too.
+
+Not a TriagePilot analysis-quality bug in the sense of getting frames or
+source wrong -- but the ESR_EC gap was a real product bug (it also broke
+crash-signature normalization and auto-tagging in the persistent memory
+system for any Apple Silicon user, not just the eval), and the two
+example fixes are the same category of example-program determinism the
+aarch64 findings above already document, just closed instead of left
+open.
 
 ### Windows: was 0/16, now 8/16 after two fixes
 

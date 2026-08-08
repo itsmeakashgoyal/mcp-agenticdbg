@@ -216,7 +216,7 @@ results table to its job summary and as a build artifact. Latest results:
 | Backend | Platform | Reproduced | Accuracy* |
 |---|---|---|---|
 | GDB | Linux (`ubuntu-latest`) | 17/17 | 100% |
-| LLDB | macOS (`macos-latest`) | 14/17 | 64% |
+| LLDB | macOS (`macos-latest`) | 16/16 | 100% |
 | CDB | Windows (`windows-latest`) | 8/16 | 67% |
 
 \* Mean of signal/frame/source-location scoring over examples that actually
