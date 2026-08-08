@@ -221,11 +221,27 @@ tool call and the LangGraph LLM reasoning step both depend on.
 uv run python eval/run_eval.py
 ```
 
-CI runs this on every push (`.github/workflows/ci.yml` → `eval` job) on a
-real `ubuntu-latest` runner and publishes the results table to the job
-summary and as a build artifact — see the [Actions tab](../../actions) for
-the current numbers. See [`eval/README.md`](eval/README.md) for scope,
-methodology, and known example-reliability caveats.
+CI runs this on every push against all three backends —
+`.github/workflows/ci.yml`'s `eval` (Linux/GDB), `macos-eval` (macOS/LLDB),
+and `windows-eval` (Windows/CDB) jobs — and publishes each platform's
+results table to its job summary and as a build artifact. Latest results:
+
+| Backend | Platform | Reproduced | Accuracy* |
+|---|---|---|---|
+| GDB | Linux (`ubuntu-latest`) | 17/17 | 100% |
+| LLDB | macOS (`macos-latest`) | 14/17 | 64% |
+| CDB | Windows (`windows-latest`) | 8/16 | 67% |
+
+\* Mean of signal/frame/source-location scoring over examples that actually
+reproduced a crash; non-reproductions are example- and allocator-specific
+(documented per-case, not counted as TriagePilot failures) — see
+[`eval/README.md`](eval/README.md) for the full per-example breakdown, root
+causes, and known gaps.
+
+![Eval results by backend](docs/eval-results.svg)
+
+See the [Actions tab](../../actions) for the current numbers, and
+[`eval/README.md`](eval/README.md) for scope and methodology.
 
 ## Troubleshooting
 
