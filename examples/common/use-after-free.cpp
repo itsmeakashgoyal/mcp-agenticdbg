@@ -2,10 +2,19 @@
  * use-after-free.cpp
  *
  * Crash type : Access violation (0xC0000005) — write to freed heap memory
- * Mechanism  : A "Connection" struct is freed, its memory is reclaimed by a
- *              new allocation that fills it with 0xAB bytes, then the stale
- *              pointer is used to dereference the (now-garbage) recv_buffer
- *              field, writing to address 0xABABABABABABABAB.
+ * Mechanism  : A "Connection" struct is freed, its memory is poisoned with
+ *              0xAB bytes, then the stale pointer is used to dereference the
+ *              (now-garbage) recv_buffer field, writing to address
+ *              0xABABABABABABABAB.
+ *
+ * Reliability note: whether a fresh allocation actually lands on a just-freed
+ * block of the same size is allocator- and platform-dependent -- a safe bet
+ * on glibc's small-bin freelist, far less so on Windows' heap manager
+ * (especially with Segment Heap / LFH), where the block may simply not be
+ * reused, leaving the stale write silently harmless instead of crashing. To
+ * keep this demo deterministic across platforms, the freed block is poisoned
+ * directly through the dangling pointer instead of hoping a new allocation
+ * happens to land on the same address.
  *
  * What to look for in WinDbg:
  *   - Write AV at 0xABABABABABABABAB (or similar poison pattern)
@@ -64,10 +73,14 @@ int main(void)
     close_connection(conn);
     conn = NULL;
 
-    /* Reallocate the same region and fill with poison bytes.
-       malloc is very likely to hand back the same block. */
+    /* Poison the freed block directly through the dangling pointer -- see
+       the reliability note above for why this doesn't rely on a fresh
+       allocation happening to reuse the same address. */
+    memset(dangling, 0xAB, sizeof(Connection));
+
+    /* A genuinely new allocation may or may not land on the same freed
+       block; either way it's no longer load-bearing for the crash above. */
     void *reuse = malloc(sizeof(Connection));
-    memset(reuse, 0xAB, sizeof(Connection));
 
     printf("\n  Accessing freed connection through dangling pointer...\n");
 
