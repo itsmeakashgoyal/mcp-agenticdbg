@@ -217,13 +217,17 @@ jobs:
         # crashing binary -- it doesn't carry over between separate `run:`
         # steps. The "core" pattern set above writes a single ./core file
         # (no %p) in the process's cwd, so running from a scratch dir gives
-        # a fixed, predictable path.
+        # a fixed, predictable path. `set -o pipefail` so a failing command
+        # piped into `tee` still fails the step -- ci-logs/ is uploaded on
+        # failure so build/crash output is visible without a GitHub login.
         run: |
-          mkdir -p /tmp/gdb-live-test
-          g++ -g -O0 -std=c++17 -Iexamples/common -o /tmp/gdb-live-test/use-after-free examples/common/use-after-free.cpp
+          set -euo pipefail
+          mkdir -p /tmp/gdb-live-test ci-logs
+          g++ -g -O0 -std=c++17 -Iexamples/common -o /tmp/gdb-live-test/use-after-free examples/common/use-after-free.cpp \
+            2>&1 | tee ci-logs/01-build.log
           cd /tmp/gdb-live-test
           ulimit -c unlimited
-          ./use-after-free || true
+          ./use-after-free 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/02-crash-run.log" || true
           if [ ! -f core ]; then
             echo "ERROR: no core file produced" >&2
             exit 1
@@ -235,13 +239,17 @@ jobs:
         # timeout-recovery fixes, plus a sanity check on MI mode's
         # SIGINT-on-timeout addition, against a real gdb -- see
         # tests/test_gdb_live.py for what each test proves.
-        run: uv run pytest tests/test_gdb_live.py -v --tb=short
-      - name: Upload core + binary on failure
+        run: |
+          set -o pipefail
+          uv run pytest tests/test_gdb_live.py -v --tb=short 2>&1 | tee ci-logs/03-pytest.log
+      - name: Upload core + binary + logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: linux-gdb-smoke-test-artifacts
-          path: /tmp/gdb-live-test/
+          path: |
+            /tmp/gdb-live-test/
+            ci-logs/
 
   macos-lldb-smoke-test:
     name: macOS LLDB Smoke Test
@@ -257,10 +265,15 @@ jobs:
           python-version: "3.12"
       - run: uv sync --dev
       - name: Build macOS crash examples
+        # `set -o pipefail` so a build failure piped into `tee` still fails
+        # the step -- ci-logs/ is uploaded on failure so this output is
+        # visible without a GitHub login.
         run: |
+          mkdir -p ci-logs
           cd examples/macos
           chmod +x build.sh
-          ./build.sh
+          set -o pipefail
+          ./build.sh 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/01-build.log"
       - name: Generate a real core dump
         # gen_core_mac.sh runs the binary under lldb itself and saves a
         # core via `process save-core` at the moment of the crash, which
@@ -270,20 +283,25 @@ jobs:
         run: |
           cd examples/macos
           chmod +x gen_core_mac.sh
-          ./gen_core_mac.sh use-after-free
+          set -o pipefail
+          ./gen_core_mac.sh use-after-free 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/02-gen-core.log"
           echo "TRIAGEPILOT_LIVE_LLDB_DUMP=$(pwd)/build/out/core.use-after-free" >> "$GITHUB_ENV"
           echo "TRIAGEPILOT_LIVE_LLDB_BINARY=$(pwd)/build/out/use-after-free" >> "$GITHUB_ENV"
       - name: Run live LLDB integration tests
         # Exercises the marker-isolation, timeout-recovery, and shutdown
         # fixes against a real lldb -- see tests/test_lldb_live.py for
         # what each test proves.
-        run: uv run pytest tests/test_lldb_live.py -v --tb=short
-      - name: Upload core + binary on failure
+        run: |
+          set -o pipefail
+          uv run pytest tests/test_lldb_live.py -v --tb=short 2>&1 | tee ci-logs/03-pytest.log
+      - name: Upload core + binary + logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: macos-lldb-smoke-test-artifacts
-          path: examples/macos/build/out/
+          path: |
+            examples/macos/build/out/
+            ci-logs/
 
   windows-cdb-smoke-test:
     name: Windows CDB Smoke Test
@@ -301,22 +319,28 @@ jobs:
       # third-party actions; the floating v1 tag currently resolves to
       # this commit (msvc-dev-cmd v1.13.0). Puts cl.exe/link.exe on PATH.
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Create log directory
+        run: New-Item -ItemType Directory -Path "$env:GITHUB_WORKSPACE\ci-logs" -Force | Out-Null
       # Same package + approach upstream mcp-windbg's own CI uses to get a
       # real cdb.exe onto a GitHub-hosted Windows runner: a silent,
       # non-interactive install of the official WinDbg Store app, which
       # lands at %LOCALAPPDATA%\Microsoft\WindowsApps\cdbX64.exe (already
       # one of CDBSession.DEFAULT_CDB_PATHS).
       - name: Install WinDbg from Microsoft Store
-        run: winget install 9PGJGD53TN86 --accept-source-agreements --accept-package-agreements
-      - run: uv sync --dev
+        run: |
+          winget install 9PGJGD53TN86 --accept-source-agreements --accept-package-agreements 2>&1 |
+            Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ci-logs\01-winget-install.log"
+      - name: uv sync
+        run: uv sync --dev 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ci-logs\02-uv-sync.log"
       - name: Build Windows crash examples
         run: |
           cd examples\windows
-          .\build.ps1
+          .\build.ps1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ci-logs\03-build.log"
       - name: Generate a real crash dump
         run: |
           cd examples\windows
-          .\run-all.ps1 -Name use-after-free
+          .\run-all.ps1 -Name use-after-free 2>&1 |
+            Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ci-logs\04-run-all.log"
       - name: Locate generated dump
         run: |
           $dump = Get-ChildItem -Path "examples\windows\build\out\dumps" -Filter "*.dmp" |
@@ -332,8 +356,10 @@ jobs:
         # process-tree-cleanup fixes in backends/cdb.py against a real
         # cdb.exe -- see tests/test_cdb_live.py for what each test proves
         # and why a mocked unit test can't cover the same ground.
-        run: uv run pytest tests/test_cdb_live.py -v --tb=short
-      - name: Upload dump + build output on failure
+        run: |
+          uv run pytest tests/test_cdb_live.py -v --tb=short 2>&1 |
+            Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ci-logs\05-pytest.log"
+      - name: Upload dump + build output + logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -341,3 +367,4 @@ jobs:
           path: |
             examples\windows\build\out\dumps\*.dmp
             examples\windows\build\out\*.pdb
+            ci-logs\
