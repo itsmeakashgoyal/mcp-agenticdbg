@@ -6,6 +6,7 @@ import logging
 
 from mcp.types import TextContent
 
+from ..redaction import redact_sensitive
 from .models import (
     ForgetPatternParams,
     ListPatternsParams,
@@ -257,11 +258,12 @@ def auto_save_analysis(
     Returns the entry ID if saved, None on error.
     """
     try:
-        sig = extract_crash_signature(analysis_text, debugger_type)
-        stack_hash = compute_stack_hash(analysis_text)
-        tokens = tokenize_for_search(analysis_text, sig.faulting_file)
+        redacted_text = redact_sensitive(analysis_text)
+        sig = extract_crash_signature(redacted_text, debugger_type)
+        stack_hash = compute_stack_hash(redacted_text)
+        tokens = tokenize_for_search(redacted_text, sig.faulting_file)
         auto_tags = extract_auto_tags(
-            analysis_text,
+            redacted_text,
             debugger_type=debugger_type,
             faulting_file=sig.faulting_file,
             exception_type=sig.exception_type,
@@ -280,7 +282,7 @@ def auto_save_analysis(
             faulting_line=sig.faulting_line,
             stack_hash=stack_hash,
             tags=auto_tags,
-            raw_analysis_snippet=analysis_text[:2000],
+            raw_analysis_snippet=redacted_text[:2000],
             tokens=tokens,
         )
         return memory_store.save(entry)

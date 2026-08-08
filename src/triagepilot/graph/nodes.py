@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from ..redaction import redact_sensitive
 from ..tools.debugger_tools import (
     get_or_create_session,
     locate_faulting_source,
@@ -171,13 +172,13 @@ def root_cause_node(state: dict) -> dict:
             context_parts.append(memory_ctx)
 
         if state.get("crash_info"):
-            context_parts.append(f"## Crash Event\n{state['crash_info']}")
+            context_parts.append(f"## Crash Event\n{redact_sensitive(state['crash_info'])}")
         if state.get("analyze_output"):
-            context_parts.append(f"## Analysis Output\n{state['analyze_output']}")
+            context_parts.append(f"## Analysis Output\n{redact_sensitive(state['analyze_output'])}")
         if state.get("stack_trace"):
-            context_parts.append(f"## Stack Trace\n{state['stack_trace']}")
+            context_parts.append(f"## Stack Trace\n{redact_sensitive(state['stack_trace'])}")
         if state.get("faulting_source"):
-            context_parts.append(f"## Faulting Source\n{state['faulting_source']}")
+            context_parts.append(f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}")
 
         context = "\n\n".join(context_parts)
         prompt = (
@@ -212,9 +213,11 @@ def suggest_fix_node(state: dict) -> dict:
         if state.get("root_cause"):
             context_parts.append(f"## Root Cause\n{state['root_cause']}")
         if state.get("faulting_source"):
-            context_parts.append(f"## Faulting Source\n{state['faulting_source']}")
+            context_parts.append(f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}")
         if state.get("analyze_output"):
-            context_parts.append(f"## Crash Analysis\n{state['analyze_output'][:2000]}")
+            context_parts.append(
+                f"## Crash Analysis\n{redact_sensitive(state['analyze_output'][:2000])}"
+            )
 
         context = "\n\n".join(context_parts)
         prompt = (
