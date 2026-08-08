@@ -107,6 +107,17 @@ class CDBSession(DebuggerSession):
         if additional_args:
             cmd_args.extend(additional_args)
 
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            # Required for send_break()'s GenerateConsoleCtrlEvent(CTRL_BREAK,
+            # ...) to target only this child's process group. Without this
+            # flag the child inherits our console's process group, and a
+            # CTRL+BREAK aimed at "the debugger" can also land on (and kill)
+            # the process hosting TriagePilot itself -- discovered while
+            # adding the timeout-recovery CTRL+BREAK call in
+            # _recover_from_timeout().
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
         try:
             self.process = subprocess.Popen(
                 cmd_args,
@@ -115,6 +126,7 @@ class CDBSession(DebuggerSession):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                **popen_kwargs,
             )
         except Exception as e:
             raise CDBError(f"Failed to start CDB process: {e}")
