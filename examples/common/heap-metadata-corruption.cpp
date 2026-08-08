@@ -200,13 +200,40 @@ static void flush_buffer(Packet *p) {
     free(p);
 }
 
+// Designated initializers (`{ .str = ... }`) are a C++20 feature that GCC
+// and Clang also tolerate as an extension under -std=c++17, but MSVC does
+// not without /std:c++20 -- so PacketField values are built through these
+// helpers instead, which are portable to every compiler/standard in use
+// across examples/linux, examples/macos, and examples/windows.
+static PacketField string_field(const char *name, const char *value) {
+    PacketField f;
+    f.type = FT_STRING;
+    f.name = name;
+    f.value.str = value;
+    return f;
+}
+static PacketField int_field(const char *name, int32_t value) {
+    PacketField f;
+    f.type = FT_INT32;
+    f.name = name;
+    f.value.i32 = value;
+    return f;
+}
+static PacketField float_field(const char *name, float value) {
+    PacketField f;
+    f.type = FT_FLOAT;
+    f.name = name;
+    f.value.f32 = value;
+    return f;
+}
+
 static void send_telemetry(const char *device_id, int temp, float voltage,
                            const char *firmware_ver) {
     PacketField fields[] = {
-        { FT_STRING, "device_id",    { .str = device_id    } },
-        { FT_INT32,  "temperature",  { .i32 = temp         } },
-        { FT_FLOAT,  "voltage",      { .f32 = voltage      } },
-        { FT_STRING, "firmware_ver", { .str = firmware_ver } },
+        string_field("device_id", device_id),
+        int_field("temperature", temp),
+        float_field("voltage", voltage),
+        string_field("firmware_ver", firmware_ver),
     };
     int n = sizeof(fields) / sizeof(fields[0]);
 

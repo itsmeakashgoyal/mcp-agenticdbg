@@ -22,7 +22,18 @@ $outDir     = Join-Path $buildDir  "out"
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $outDir   -Force | Out-Null
 
-$sources = Get-ChildItem -Path $commonDir -Filter "*.cpp"
+# thread-uaf.cpp uses raw POSIX pthreads (<pthread.h>, <sched.h>,
+# pthread_create/pthread_join) for its watchdog/worker handshake -- there's
+# no MSVC-native equivalent, and porting it to std::thread would mean
+# rewriting the exact atomic handshake timing that makes the UAF reproduce
+# deterministically (see git history) without a real Windows box to verify
+# against. Every other example already uses portable std::thread/std::mutex
+# (see lock-order-inversion-deadlock.cpp, concurrent-vector-race.cpp,
+# detached-thread-dangling-stack.cpp) and builds fine here.
+$excluded = @("thread-uaf.cpp")
+
+$sources = Get-ChildItem -Path $commonDir -Filter "*.cpp" |
+    Where-Object { $excluded -notcontains $_.Name }
 if ($sources.Count -eq 0) {
     Write-Warning "No .cpp files found in $commonDir"
     exit 1
@@ -36,16 +47,19 @@ foreach ($src in $sources) {
 
     Write-Host "Building $($src.Name) -> $exe" -ForegroundColor Cyan
 
-    # /Zi   — generate debug info (compiler PDB)
-    # /Od   — disable optimisation (cleaner stack traces for demos)
-    # /MT   — static CRT (self-contained exe)
-    # /EHsc — standard C++ exception handling
-    # /GS-  — disable buffer security checks so overruns show raw corruption
-    # /I    — include path for crashdump.h in common/
+    # /Zi        — generate debug info (compiler PDB)
+    # /Od        — disable optimisation (cleaner stack traces for demos)
+    # /MT        — static CRT (self-contained exe)
+    # /EHsc      — standard C++ exception handling
+    # /GS-       — disable buffer security checks so overruns show raw corruption
+    # /std:c++17 — match the -std=c++17 used by examples/linux and
+    #              examples/macos; without an explicit /std, MSVC's default
+    #              conformance mode is older and unspecified across versions
+    # /I         — include path for crashdump.h in common/
     # /link /DEBUG          — linker: emit full PDB
     # /link /INCREMENTAL:NO — linker: no incremental linking
     # /link /PDB:<path>     — linker: place PDB next to exe
-    cl.exe /nologo /Zi /Od /MT /EHsc /GS- /I"$commonDir" `
+    cl.exe /nologo /Zi /Od /MT /EHsc /GS- /std:c++17 /I"$commonDir" `
         /Fo:$obj /Fe:$exe $src.FullName `
         /link /DEBUG /INCREMENTAL:NO /PDB:$pdb
 

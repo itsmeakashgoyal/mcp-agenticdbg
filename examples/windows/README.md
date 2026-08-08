@@ -25,7 +25,9 @@ cd examples\windows
 .\build.ps1
 ```
 
-This compiles all 10 examples from `..\common\` with full debug symbols:
+This compiles every example from `..\common\` (except `thread-uaf.cpp`,
+which uses raw POSIX pthreads with no MSVC equivalent -- see the comment
+in `build.ps1`) with full debug symbols:
 - `/Zi` -- generate PDB debug info
 - `/Od` -- no optimization (clean stack traces)
 - `/GS-` -- disable stack cookies (show raw corruption)
@@ -120,6 +122,6 @@ Quick reference for interactive debugging via `run_debugger_cmd`:
 
 **Multi-threaded crash:**
 ```powershell
-.\run-all.ps1 -Name thread-uaf
-# Two threads race on the same object -- check ~*kb to see both threads
+.\run-all.ps1 -Name concurrent-vector-race
+# Four threads race on the same std::vector -- check ~*kb to see all of them
 ```

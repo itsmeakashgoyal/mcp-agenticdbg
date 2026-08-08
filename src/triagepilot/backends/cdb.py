@@ -655,9 +655,7 @@ class CDBSession(DebuggerSession):
             self._wait_for_prompt(timeout=10)
             logger.info("CDB resynchronized after CTRL+BREAK; session still usable")
         except (CDBError, DebuggerError):
-            logger.warning(
-                "CDB did not resynchronize after CTRL+BREAK; session may be unusable"
-            )
+            logger.warning("CDB did not resynchronize after CTRL+BREAK; session may be unusable")
         raise CDBError(f"Command timed out after {waited} seconds: {command}")
 
     def send_break(self) -> bool:
