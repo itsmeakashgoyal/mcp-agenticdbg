@@ -9,13 +9,17 @@
  *               that has since been unmapped.
  *
  * Reliability note: a plain small-object use-after-free frequently does
- * *not* crash on glibc -- the freed bytes are usually still mapped and
- * untouched, so a stale write "succeeds" silently. To make this demo fault
- * immediately and deterministically, `Session` is padded well past glibc's
- * mmap threshold (the same technique iterator-invalidation.cpp uses for its
- * std::vector reallocation), so new/delete on it go through mmap()/munmap()
- * directly -- once freed, the memory is truly gone, not just returned to a
- * reusable free list.
+ * *not* crash -- the freed bytes are usually still mapped and untouched, so
+ * a stale write "succeeds" silently. glibc will actually munmap() a large
+ * enough allocation on free() (padding past its mmap threshold used to be
+ * this demo's technique), but that's a glibc-specific heuristic: macOS's
+ * libmalloc keeps freed allocations mapped and reusable regardless of size
+ * (confirmed empirically -- even an 8 MiB malloc()/free() survives a stale
+ * write untouched), so the padding trick doesn't reproduce there. Session
+ * instead defines its own operator new/delete backed directly by
+ * mmap()/munmap(), bypassing the platform allocator's heuristics entirely --
+ * once `delete s` runs, the memory is unconditionally unmapped on every
+ * POSIX platform.
  *
  * The watchdog and worker also synchronise through an explicit atomic
  * request counter (the same style concurrent-vector-race.cpp and
@@ -45,7 +49,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <atomic>
+#include <new>
 #include "crashdump.h"
 
 // ---------------------------------------------------------------------------
@@ -58,17 +64,26 @@ struct Metric {
     int    count;
 };
 
-// Padded well past glibc's default mmap threshold (128 KiB) so that
-// new/delete on a Session go through mmap/munmap directly: once freed, the
-// memory is truly unmapped, and a stale access faults immediately instead
-// of silently succeeding on a still-mapped, not-yet-reused free-list entry.
 struct Session {
     int    id;
     char   remote_addr[64];
     Metric metrics[8];
     int    metric_count;
     int    request_count;
-    char   _pad[192 * 1024];
+
+    // Backed directly by mmap/munmap instead of the platform malloc, so
+    // `delete s` unconditionally unmaps the memory -- see the file header's
+    // "Reliability note" for why relying on malloc's own mmap-threshold
+    // heuristic (as an earlier version of this demo did) isn't portable.
+    static void *operator new(size_t size) {
+        void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) throw std::bad_alloc();
+        return p;
+    }
+    static void operator delete(void *p, size_t size) {
+        munmap(p, size);
+    }
 
     void record(const char *metric_name, double value) {
         // BUG: called after the Session has been freed (and unmapped) --

@@ -14,12 +14,18 @@
  *
  * Complexity  : There is no explicit free()/delete anywhere near the crash
  *               -- the "free" is std::vector's internal reallocation, many
- *               calls after the pointer was cached. Each `Sample` is
- *               deliberately oversized so the backing array crosses
- *               glibc's mmap threshold: the freed array is truly unmapped,
- *               so the stale pointer faults immediately and deterministically
- *               instead of silently succeeding on a still-mapped free list
- *               entry.
+ *               calls after the pointer was cached. `samples_` uses
+ *               DirectMapAllocator (below) instead of the default
+ *               std::allocator, so each reallocation's old backing array is
+ *               released via a direct mmap/munmap (or VirtualAlloc/
+ *               VirtualFree on Windows) rather than the platform malloc.
+ *               Relying on malloc's own large-allocation heuristics (an
+ *               earlier version of this demo padded Sample past glibc's
+ *               mmap threshold) only produces a real, immediate unmap on
+ *               glibc -- confirmed empirically that macOS's libmalloc keeps
+ *               freed allocations mapped and reusable regardless of size,
+ *               so the stale pointer just silently succeeds there instead
+ *               of faulting.
  *
  * What to look for in GDB:
  *   - bt               -- crash inside finalize_sample(), writing to *s
@@ -36,23 +42,80 @@
  *     must outlive further growth.
  */
 #include <cstdio>
+#include <new>
 #include <vector>
 #include "crashdump.h"
 
-// Padded well past glibc's default mmap threshold (128 KiB) so that the
-// vector's backing allocation is mmap-backed, and freeing it on growth
-// truly unmaps the memory rather than returning it to a reusable free list.
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 struct Sample {
     double value;
     int    flags;
     char   label[32];
-    char   _pad[192 * 1024];
 };
+
+// Allocator that maps/unmaps memory directly via the OS instead of going
+// through the platform malloc -- see the file header's "Complexity" note
+// for why relying on malloc's own large-allocation heuristics (an earlier
+// version of this demo padded Sample and depended on glibc's mmap
+// threshold) isn't portable. Mirrors thread-uaf.cpp's custom operator
+// new/delete, generalized to a container's internal (re)allocations.
+template <class T>
+struct DirectMapAllocator {
+    using value_type = T;
+
+    DirectMapAllocator() = default;
+    template <class U> DirectMapAllocator(const DirectMapAllocator<U> &) {}
+
+    T *allocate(size_t n) {
+        size_t bytes = n * sizeof(T);
+#if defined(_WIN32)
+        void *p = VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!p) throw std::bad_alloc();
+#else
+        void *p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) throw std::bad_alloc();
+#endif
+        return static_cast<T *>(p);
+    }
+
+    void deallocate(T *p, size_t n) noexcept {
+        // A plain munmap()/VirtualFree(..., MEM_RELEASE) releases the
+        // address back to the OS -- which then happily hands that exact
+        // range right back out for the *next* similarly-sized allocation
+        // (confirmed empirically: the freed buffer's address was the very
+        // next one mmap() returned a couple of growths later), silently
+        // making a stale pointer valid again instead of faulting. Remapping
+        // PROT_NONE / decommitting in place keeps the range reserved by
+        // this process forever, so it can never be handed to a later
+        // allocation and a stale access always faults.
+#if defined(_WIN32)
+        VirtualFree(p, n * sizeof(T), MEM_DECOMMIT);
+#else
+        mmap(p, n * sizeof(T), PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+    }
+};
+
+template <class T, class U>
+bool operator==(const DirectMapAllocator<T> &, const DirectMapAllocator<U> &) {
+    return true;
+}
+template <class T, class U>
+bool operator!=(const DirectMapAllocator<T> &, const DirectMapAllocator<U> &) {
+    return false;
+}
 
 class MetricsBuffer {
 public:
     Sample *record_sample(double v) {
-        samples_.push_back(Sample{v, 0, {0}, {0}});
+        samples_.push_back(Sample{v, 0, {0}});
         return &samples_.back();   // BUG: valid only until the next growth
     }
 
@@ -67,7 +130,7 @@ public:
     size_t capacity() const { return samples_.capacity(); }
 
 private:
-    std::vector<Sample> samples_;
+    std::vector<Sample, DirectMapAllocator<Sample>> samples_;
 };
 
 int main() {

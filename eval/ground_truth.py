@@ -152,14 +152,16 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         notes=(
             "Hardened for determinism: replaced the usleep()-based timing guess "
             "with an explicit atomic request-counter handshake between worker and "
-            "watchdog, and padded Session past glibc's mmap threshold so free() "
-            "truly unmaps it (a plain small-object UAF often doesn't fault at all "
-            "on glibc). Crashed 20/20 direct test runs on Ubuntu 22.04 x86_64 "
-            "glibc 2.35. The mmap-threshold trick is glibc-specific and doesn't "
-            "apply on macOS's libmalloc -- did not reproduce in the first "
-            "macos-eval CI run (real result, not guessed; see eval/README.md). "
-            "Also excluded from the Windows build entirely (raw POSIX pthreads, "
-            "no MSVC equivalent)."
+            "watchdog. Originally padded Session past glibc's mmap threshold so "
+            "free() would unmap it, but that's a glibc-specific heuristic -- "
+            "confirmed empirically (on real macOS hardware) that macOS's "
+            "libmalloc keeps freed allocations mapped and reusable regardless of "
+            "size, even at 8 MiB, so the padding trick never reproduced there. "
+            "Session now defines its own operator new/delete backed directly by "
+            "mmap()/munmap(), bypassing the platform allocator entirely -- "
+            "confirmed 10/10 direct runs on macOS (arm64, macOS 15.7). Also "
+            "excluded from the Windows build entirely (raw POSIX pthreads, no "
+            "MSVC equivalent)."
         ),
     ),
     # --- New "advanced" examples ------------------------------------------
@@ -175,18 +177,27 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         name="iterator-invalidation",
         source_file="iterator-invalidation.cpp",
         category="advanced",
-        expected_signals=("SIGSEGV",),
+        expected_signals=("SIGSEGV", "SIGBUS"),
         expected_functions=("finalize_sample",),
         expected_file="iterator-invalidation.cpp",
         notes=(
-            "Did not reproduce in the first macos-eval and windows-eval CI runs "
-            "(real result, not guessed; see eval/README.md) -- both ran to "
-            "completion with exit status 0, no crash. Same category as "
-            "thread-uaf: relies on a freed small vector buffer being reused (or "
-            "at least still faulting when touched) rather than sitting untouched "
-            "in a per-size-class free list, which is allocator-specific and "
-            "apparently doesn't hold on libmalloc (macOS) or MSVC's release heap "
-            "(Windows) the way it does on glibc."
+            "Originally padded Sample past glibc's mmap threshold, which did not "
+            "reproduce in the first macos-eval and windows-eval CI runs (real "
+            "result, not guessed; see eval/README.md) -- both ran to completion "
+            "with exit status 0, no crash. Root-caused on real macOS hardware: "
+            "libmalloc keeps freed allocations mapped regardless of size. "
+            "samples_ now uses DirectMapAllocator, a custom allocator backed "
+            "directly by mmap()/VirtualAlloc. A first mmap/munmap-only version "
+            "still didn't reproduce reliably -- the kernel handed the "
+            "just-freed address straight back out to the *next* similarly-sized "
+            "mmap() a couple of growths later (confirmed via allocation-address "
+            "tracing), silently making the stale pointer valid again. Remapping "
+            "the freed range PROT_NONE (Windows: MEM_DECOMMIT) instead of "
+            "releasing it keeps the address permanently reserved, so it can "
+            "never be reused: confirmed 15/15 direct runs on macOS (arm64, "
+            "macOS 15.7), crashing with SIGBUS there (PROT_NONE access is "
+            "SIGBUS on macOS vs. SIGSEGV on Linux for an unmapped page -- same "
+            "architecture-dependent-signal category as stack-buffer-overrun)."
         ),
     ),
     CrashGroundTruth(
