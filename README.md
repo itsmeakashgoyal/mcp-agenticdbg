@@ -9,6 +9,7 @@
 [![Linux](https://img.shields.io/badge/Linux-GDB-FCC624?logo=linux&logoColor=black)](#platform-support)
 [![macOS](https://img.shields.io/badge/macOS-LLDB-000000?logo=apple&logoColor=white)](#platform-support)
 [![Last Commit](https://img.shields.io/github/last-commit/itsmeakashgoyal/mcp-agenticdbg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/commits/master)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/itsmeakashgoyal/mcp-agenticdbg)
 
 Grounding AI debugging in runtime truth for crash dumps.
 
@@ -37,6 +38,15 @@ Inspired by [`mcp-windbg`](https://github.com/svnscha/mcp-windbg).
 | macOS    | LLDB | core dumps | Supported |
 
 Works with binaries compiled by **MSVC**, **Clang**, **GCC**, or any compiler that produces standard debug information.
+
+## Try It Now (Zero Install)
+
+Click **[Open in GitHub Codespaces](https://codespaces.new/itsmeakashgoyal/mcp-agenticdbg)** — it installs `gdb`, builds the example crash programs, generates a real core dump, and drops you into a shell with TriagePilot ready to run. No local debugger setup required.
+
+```bash
+# Once the Codespace is ready:
+uv run python eval/run_eval.py --only use-after-free
+```
 
 ## Quick Start
 
