@@ -76,36 +76,6 @@ We use GitHub issue templates for all bug reports and feature requests. When you
 
 Blank issues are disabled. If your issue doesn't fit a template, start a [discussion](https://github.com/AkashGoyal/mcp-agenticdbg/discussions) instead.
 
-## DCO (Developer Certificate of Origin)
-
-All contributions require a DCO sign-off. This is a lightweight way to certify that you wrote or have the right to submit the code. See [developercertificate.org](https://developercertificate.org/) for the full text.
-
-**How to sign off:**
-
-Add `-s` when committing:
-
-```bash
-git commit -s -m "Fix GDB output parsing for async frames"
-```
-
-This appends a `Signed-off-by: Your Name <your@email.com>` trailer using your git config.
-
-**Make it automatic** (recommended — never forget `-s` again):
-
-```bash
-git config format.signoff true         # this repo only
-git config --global format.signoff true  # every repo
-```
-
-**Retroactively sign off** (if you forgot):
-
-```bash
-git rebase --signoff HEAD~N   # where N is the number of commits to fix
-git push --force-with-lease
-```
-
-The DCO check runs automatically on all PRs and must pass before merging.
-
 ## Pull Request Process
 
 1. Fork the repo and create a branch from `master`

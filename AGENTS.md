@@ -111,10 +111,8 @@ When asked to analyze a crash dump:
 
 GitHub Actions workflows in `.github/workflows/`:
 - **ci.yml**: Lint (ruff), type check (mypy), and test (pytest) across Python 3.10-3.12 on Ubuntu/macOS/Windows. Uses `uv` for dependency management.
-- **dco.yml**: DCO sign-off check on PRs.
 
 ## Commits & PRs
 
-- All commits require DCO sign-off (`git commit -s`)
 - Run `uv run ruff check src/ && uv run ruff format --check src/ && uv run pytest` before committing
 - Branch naming: `users/<ldap>/<feature>` for PRs

@@ -1,7 +1,6 @@
 # mcp-agenticdbg (TriagePilot)
 
 [![CI](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml/badge.svg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml)
-[![DCO](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/dco.yml/badge.svg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/dco.yml)
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![MCP](https://img.shields.io/badge/MCP-1.17%2B-6E56CF)](https://modelcontextprotocol.io/)
