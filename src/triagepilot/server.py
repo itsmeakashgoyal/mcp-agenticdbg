@@ -640,7 +640,12 @@ async def serve(
     options = server.create_initialization_options()
     try:
         async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, options, raise_exceptions=True)
+            # raise_exceptions=False (the SDK default) so a single malformed
+            # or unparseable stdio line is logged and skipped instead of
+            # tearing down the entire server process -- mirrors a fix in
+            # upstream mcp-windbg 1.0.0, whose stdio transport used to crash
+            # outright on the same kind of input.
+            await server.run(read_stream, write_stream, options, raise_exceptions=False)
     except (anyio.BrokenResourceError, Exception) as exc:
         # Swallow broken-pipe errors that occur when the MCP client disconnects;
         # re-raise anything unexpected.

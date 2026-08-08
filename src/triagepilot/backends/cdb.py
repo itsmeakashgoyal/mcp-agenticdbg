@@ -28,8 +28,12 @@ SLOW_COMMAND_PREFIXES = (
 )
 
 PROMPT_REGEX = re.compile(r"^\d+:\d+>\s*$")
+# Base prefix for the per-command completion marker. Each call gets its own
+# unique token (see CDBSession._next_marker_token()) instead of reusing this
+# literal string -- a fixed marker means a late echo from a timed-out command
+# can be mistaken for the *next* command's completion, silently attributing
+# stale output to the wrong call (mirrors a fix in upstream mcp-windbg 1.0.0).
 COMMAND_MARKER_TOKEN = "CDB_COMMAND_COMPLETED_MARKER"
-COMMAND_MARKER = f".echo {COMMAND_MARKER_TOKEN}"
 
 DEFAULT_CDB_PATHS = [
     r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
@@ -123,6 +127,9 @@ class CDBSession(DebuggerSession):
         self._marker_seen = False
         self._marker_seen_time = 0.0
         self._last_output_time = time.monotonic()
+        # Per-call unique marker state -- see COMMAND_MARKER_TOKEN comment.
+        self._marker_counter = 0
+        self._expected_marker_token: str | None = None
 
         self._reader_thread = threading.Thread(
             target=self._read_output,
@@ -484,8 +491,13 @@ class CDBSession(DebuggerSession):
                 logger.debug("CDB > %s", line)
                 with self._lock:
                     self._last_output_time = time.monotonic()
-                    if COMMAND_MARKER_TOKEN in line:
-                        # Don't append the marker line itself.
+                    expected = self._expected_marker_token
+                    if expected and expected in line:
+                        # Don't append the marker line itself. Comparing
+                        # against the *current* expected token (not just any
+                        # COMMAND_MARKER_TOKEN substring) means a stray late
+                        # marker from a previous, already-timed-out command
+                        # can't be mistaken for this one's completion.
                         self._marker_seen = True
                         self._marker_seen_time = time.monotonic()
                         self._ready_event.set()
@@ -519,14 +531,26 @@ class CDBSession(DebuggerSession):
                 return
             time.sleep(0.02)
 
+    def _next_marker_token(self) -> str:
+        """Return a fresh, never-reused completion-marker token.
+
+        Only called while holding ``_command_lock`` (or during single-
+        threaded ``__init__``), so a plain counter is safe without extra
+        locking.
+        """
+        self._marker_counter += 1
+        return f"{COMMAND_MARKER_TOKEN}_{self._marker_counter}"
+
     def _wait_for_prompt(self, timeout=None):
         try:
             self._ready_event.clear()
+            token = self._next_marker_token()
             with self._lock:
                 self._buffer = []
                 self._marker_seen = False
                 self._marker_seen_time = 0.0
-            self.process.stdin.write(f"{COMMAND_MARKER}\n")
+                self._expected_marker_token = token
+            self.process.stdin.write(f".echo {token}\n")
             self.process.stdin.flush()
             if not self._ready_event.wait(timeout=timeout or self.timeout):
                 raise CDBError("Timed out waiting for CDB prompt")
@@ -539,13 +563,15 @@ class CDBSession(DebuggerSession):
 
         with self._command_lock:
             self._ready_event.clear()
+            token = self._next_marker_token()
             with self._lock:
                 self._buffer = []
                 self._marker_seen = False
                 self._marker_seen_time = 0.0
+                self._expected_marker_token = token
 
             try:
-                self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
+                self.process.stdin.write(f"{command}\n.echo {token}\n")
                 self.process.stdin.flush()
             except OSError as e:
                 raise CDBError(f"Failed to send command: {e}")
@@ -555,7 +581,7 @@ class CDBSession(DebuggerSession):
             else:
                 fixed_timeout = timeout if timeout is not None else self.timeout
                 if not self._ready_event.wait(timeout=fixed_timeout):
-                    raise CDBError(f"Command timed out after {fixed_timeout} seconds: {command}")
+                    self._recover_from_timeout(command, fixed_timeout)
 
             # Give CDB a brief chance to finish emitting output after the marker.
             self._drain_until_quiet()
@@ -589,13 +615,38 @@ class CDBSession(DebuggerSession):
             with self._lock:
                 idle_seconds = time.monotonic() - self._last_output_time
             if idle_seconds >= idle_limit:
-                raise CDBError(
-                    f"Command appears stuck (no output for {int(idle_seconds)}s): {command}"
-                )
+                self._recover_from_timeout(command, int(idle_seconds))
             if time.monotonic() - start_time >= _MAX_WALL_CLOCK_S:
-                raise CDBError(
-                    f"Command exceeded max wall-clock time ({_MAX_WALL_CLOCK_S}s): {command}"
-                )
+                self._recover_from_timeout(command, _MAX_WALL_CLOCK_S)
+
+    def _recover_from_timeout(self, command: str, waited: float | int) -> None:
+        """Break in and resynchronize after *command* times out, then raise.
+
+        CDB is still busy running *command* when a timeout fires -- without
+        this, the session is left wedged: the caller gives up and returns an
+        error, but the next send_command() would send a new command while
+        CDB is still chewing on the old one, and its eventual (late) output
+        would land in the wrong place. Sending CTRL+BREAK interrupts CDB and
+        drops it back to a prompt, and re-running _wait_for_prompt() with a
+        fresh marker confirms it actually resynchronized before we hand
+        control back to the caller (mirrors a fix in upstream mcp-windbg
+        1.0.0, where a slow command otherwise permanently wedged the
+        session).
+        """
+        logger.warning(
+            "CDB command timed out after %ss, attempting CTRL+BREAK recovery: %s",
+            waited,
+            command,
+        )
+        try:
+            self.send_break()
+            self._wait_for_prompt(timeout=10)
+            logger.info("CDB resynchronized after CTRL+BREAK; session still usable")
+        except (CDBError, DebuggerError):
+            logger.warning(
+                "CDB did not resynchronize after CTRL+BREAK; session may be unusable"
+            )
+        raise CDBError(f"Command timed out after {waited} seconds: {command}")
 
     def send_break(self) -> bool:
         """Send a break/interrupt signal to the CDB process."""
@@ -622,12 +673,46 @@ class CDBSession(DebuggerSession):
                 except Exception:
                     pass
                 if self.process.poll() is None:
-                    self.process.terminate()
-                    self.process.wait(timeout=3)
+                    self._kill_process_tree()
         except Exception as e:
             logger.warning("Error during shutdown: %s", e)
         finally:
             self.process = None
+
+    def _kill_process_tree(self) -> None:
+        """Terminate the CDB process and any children it spawned.
+
+        A plain terminate() only signals the immediate child. When cdb.exe
+        is launched via a Microsoft Store execution alias (see
+        DEFAULT_CDB_PATHS), that immediate process is a thin stub that
+        spawns the real cdb.exe as its own child process -- terminate()
+        kills the stub and leaves the real debugger (still holding the
+        dump/target open) running in the background (mirrors a fix in
+        upstream mcp-windbg 1.0.0). ``taskkill /T`` kills the whole tree.
+        """
+        if not self.process:
+            return
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.process.wait(timeout=3)
+                return
+            except Exception as e:
+                logger.warning("taskkill process-tree kill failed, falling back: %s", e)
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=3)
+        except Exception:
+            try:
+                self.process.kill()
+                self.process.wait(timeout=3)
+            except Exception:
+                pass
 
     def get_session_id(self) -> str:
         return os.path.abspath(self.dump_path)
