@@ -377,7 +377,9 @@ async def serve(
                     description=(
                         "Autonomous end-to-end crash dump triage using a LangGraph workflow. "
                         "Runs debugger analysis, extracts metadata, performs LLM-based root cause "
-                        "analysis, suggests fixes, and optionally creates a PR or shared patch."
+                        "analysis, suggests fixes, and creates a shared patch for gitignored-"
+                        "component changes. PR creation is not yet implemented -- repo-local "
+                        "fixes are reported only, use create_repo_pr separately if you want a PR."
                     ),
                     inputSchema=AutoTriageParams.model_json_schema(),
                 )
