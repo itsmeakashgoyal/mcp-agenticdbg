@@ -162,6 +162,37 @@ Process 0 stopped
         sig = extract_crash_signature(self.LLDB_ARM64_ABORT_CORE_ANALYSIS, "lldb")
         assert sig.exception_type == "SIGABRT"
 
+    # Captured verbatim from real macOS 26 CI (arm64): a newer libmalloc
+    # ("xzone malloc") embeds a `brk` instruction as an inline hardware
+    # assertion in its fast malloc/free paths, catching a use-after-free's
+    # corrupted free-list *inside a later malloc() call* -- before any
+    # ordinary SIGSEGV/SIGABRT would occur.
+    LLDB_ARM64_MALLOC_BRK_ANALYSIS = """\
+(lldb) thread info
+thread #1: tid = 0x1b1a, 0x0000000181ba6e8c libsystem_malloc.dylib`mfm_alloc + 524, stop reason = ESR_EC_BRK_AARCH64 (fault address: 0x0)
+
+=== Process Status ===
+(lldb) process status
+Process 0 stopped
+* thread #1, stop reason = ESR_EC_BRK_AARCH64 (fault address: 0x0)
+    frame #0: 0x0000000181ba6e8c libsystem_malloc.dylib`mfm_alloc + 524
+"""
+
+    def test_extract_lldb_arm64_malloc_brk_maps_to_sigabrt(self):
+        sig = extract_crash_signature(self.LLDB_ARM64_MALLOC_BRK_ANALYSIS, "lldb")
+        assert sig.exception_type == "SIGABRT"
+
+    def test_extract_lldb_arm64_unrelated_brk_falls_back_to_raw_label(self):
+        # A breakpoint trap with no libsystem_malloc.dylib nearby (e.g. a
+        # compiler-inserted __builtin_trap() in user code) should NOT be
+        # guessed as SIGABRT -- there's nothing here to disambiguate it.
+        text = (
+            "* thread #1, stop reason = ESR_EC_BRK_AARCH64 (fault address: 0x0)\n"
+            "    frame #0: 0x0000000100001000 myapp`do_thing + 12\n"
+        )
+        sig = extract_crash_signature(text, "lldb")
+        assert sig.exception_type == "ESR_EC_BRK_AARCH64"
+
     def test_extract_cdb_signature(self):
         sig = extract_crash_signature(self.CDB_ANALYSIS, "cdb")
         assert sig.exception_type == "ACCESS_VIOLATION"

@@ -55,8 +55,30 @@ _LLDB_ESR_EC_TO_SIGNAL = {
     "IABORT_EL0": "SIGSEGV",  # instruction abort (bad jump target) from user mode
     "PC_ALIGN": "SIGBUS",  # misaligned PC
     "SP_ALIGN": "SIGBUS",  # misaligned SP
-    "BRK_AARCH64": "SIGTRAP",  # breakpoint instruction
+    # BRK_AARCH64 (breakpoint instruction) is NOT mapped unconditionally here
+    # -- see _LLDB_BRK_CONTEXT_CHARS below, it needs the surrounding frame to
+    # disambiguate.
 }
+# A newer macOS libmalloc ("xzone malloc") now embeds a `brk` instruction as
+# an inline hardware assertion in its fast malloc/free paths -- confirmed on
+# real macOS 26 CI (arm64) that a use-after-free, a double-free, and a
+# heap-corruption example all report the identical "ESR_EC_BRK_AARCH64" stop
+# reason instead of SIGSEGV/SIGABRT, catching the corruption *before* any
+# ordinary fault or abort() would occur (double-free's crash message is
+# literally "BUG IN LIBMALLOC: malloc assertion ... failed"). All three land
+# inside libsystem_malloc.dylib (mfm_alloc/mfm_free) at the trap point, which
+# is how this is told apart from an unrelated breakpoint trap in user code
+# (a compiler-inserted __builtin_trap(), an ASan check, etc.) that happens to
+# report the same generic ARM64 exception class.
+_LLDB_BRK_CONTEXT_CHARS = 200
+
+
+def _is_malloc_assertion_brk(text: str, match_start: int, match_end: int) -> bool:
+    start = max(0, match_start - _LLDB_BRK_CONTEXT_CHARS)
+    end = min(len(text), match_end + _LLDB_BRK_CONTEXT_CHARS)
+    return "libsystem_malloc.dylib" in text[start:end]
+
+
 # libsystem_c's abort() frame, as lldb prints it in a backtrace
 # ("libsystem_c.dylib`abort + 124") -- the one reliable signal that a saved
 # core was terminated by a raised signal (SIGABRT) rather than a hardware
@@ -162,7 +184,12 @@ def _extract_exception_type(text: str, debugger_type: str) -> str | None:
             return m.group(1)
         m = _LLDB_ESR_EC_RE.search(text)
         if m:
-            return _LLDB_ESR_EC_TO_SIGNAL.get(m.group(1), f"ESR_EC_{m.group(1)}")
+            ec_class = m.group(1)
+            if ec_class == "BRK_AARCH64":
+                if _is_malloc_assertion_brk(text, m.start(), m.end()):
+                    return "SIGABRT"
+                return f"ESR_EC_{ec_class}"
+            return _LLDB_ESR_EC_TO_SIGNAL.get(ec_class, f"ESR_EC_{ec_class}")
         # A signal-delivered abort (as opposed to a hardware fault like the
         # ESR_EC cases above) carries no stop-reason at all when lldb loads
         # a *saved core file* rather than live-attaching -- confirmed

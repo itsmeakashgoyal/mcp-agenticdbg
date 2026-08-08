@@ -54,9 +54,17 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         name="use-after-free",
         source_file="use-after-free.cpp",
         category="simple",
-        expected_signals=("SIGSEGV",),
+        expected_signals=("SIGSEGV", "SIGABRT"),
         expected_functions=("main",),
         expected_file="use-after-free.cpp",
+        notes=(
+            "On real macOS 26 CI (arm64), a newer libmalloc catches this "
+            "specific use-after-free with an inline hardware-assertion trap "
+            "inside a later malloc() call (mfm_alloc), before the stale "
+            "write itself would fault -- reported as SIGABRT (see "
+            "memory/signature.py's ESR_EC_BRK_AARCH64 handling), not the "
+            "SIGSEGV a raw wild write produces on Linux/older macOS/Windows."
+        ),
     ),
     CrashGroundTruth(
         name="double-free",
