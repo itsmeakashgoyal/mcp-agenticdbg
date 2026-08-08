@@ -50,6 +50,7 @@ sys.path.insert(0, SRC_DIR)
 from ground_truth import GROUND_TRUTH, CrashGroundTruth  # noqa: E402
 
 from triagepilot.backends import create_session, detect_debugger_type  # noqa: E402
+from triagepilot.memory.signature import extract_crash_signature  # noqa: E402
 from triagepilot.tools.debugger_tools import locate_faulting_source  # noqa: E402
 
 SIGNAL_PATTERN = re.compile(r"\b(SIG[A-Z]+)\b")
@@ -392,9 +393,22 @@ def evaluate_example(
 
         combined = f"{crash_info}\n{analysis}"
 
-        # 1. Signal match
-        result.signal_match = any(sig in combined for sig in entry.expected_signals) or (
-            signal_name is not None and signal_name in entry.expected_signals
+        # 1. Signal match. Prefer TriagePilot's own signal-extraction path
+        # (extract_crash_signature -- the same one auto_save_analysis and
+        # the LangGraph memory nodes use) over a raw substring search: this
+        # is what the eval is actually meant to be grading ("did TriagePilot
+        # correctly identify the crash signal"), and a raw substring check
+        # gives a false pass/fail whenever the debugger's own wording
+        # doesn't happen to contain the literal signal name -- e.g. lldb on
+        # Apple Silicon reports arm64 exception classes like
+        # "ESR_EC_DABORT_EL0" instead of "SIGSEGV" in its stop-reason text,
+        # which extract_crash_signature translates but a substring search
+        # never would.
+        detected_signal = extract_crash_signature(combined, debugger_type).exception_type
+        result.signal_match = (
+            any(sig in combined for sig in entry.expected_signals)
+            or (signal_name is not None and signal_name in entry.expected_signals)
+            or (detected_signal is not None and detected_signal in entry.expected_signals)
         )
 
         # 2. Frame / function match
