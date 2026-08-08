@@ -221,7 +221,24 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         expected_signals=("SIGABRT",),
         expected_functions=("~ScopedTransaction", "process_orders_batch", "commit"),
         expected_file="exception-in-destructor-terminate.cpp",
-        notes="Top frames are libstdc++ terminate-handler internals, not user code.",
+        notes=(
+            "Top frames are libstdc++ (Linux) or libc++abi (macOS) "
+            "terminate-handler internals, not user code. On real macOS 26 CI "
+            "(arm64), lldb's unwind stops dead at "
+            "libc++abi.dylib`demangling_terminate_handler() -- no user-code "
+            "frame at all, on any thread, missing frame and source match "
+            "entirely (confirmed from CI's captured crash_info+analysis; "
+            "signal detection via the abort-backtrace fallback still works "
+            "since that frame chain is present). Ruled out core-completeness "
+            "as the cause: `process save-core`'s default style already "
+            "matches --style modified-memory (confirmed byte-identical "
+            "locally), and --style full is a ~5 GB core per example -- "
+            "impractical for CI, and system libraries resolve from disk on "
+            "the same machine regardless of style. Looks like a genuine "
+            "lldb/libc++abi compact-unwind gap specific to this "
+            "double-exception-during-destructor-unwind call chain on this "
+            "macOS version; not fixed here."
+        ),
     ),
     CrashGroundTruth(
         name="cyclic-refcount-stack-overflow",
