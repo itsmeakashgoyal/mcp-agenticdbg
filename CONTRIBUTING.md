@@ -90,6 +90,13 @@ git commit -s -m "Fix GDB output parsing for async frames"
 
 This appends a `Signed-off-by: Your Name <your@email.com>` trailer using your git config.
 
+**Make it automatic** (recommended — never forget `-s` again):
+
+```bash
+git config format.signoff true         # this repo only
+git config --global format.signoff true  # every repo
+```
+
 **Retroactively sign off** (if you forgot):
 
 ```bash

@@ -1,30 +1,29 @@
 name: DCO
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [master]
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   dco:
     name: DCO Sign-Off Check
-    if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
+      # Plain `pull_request` (not `pull_request_target`) checks out the PR's
+      # own commits safely for both same-repo branches and forks, using the
+      # workflow file from the base branch -- no need to special-case forks
+      # or manually add an upstream remote. This also fixes a bug in the
+      # previous version, which only ran this check for fork PRs and silently
+      # skipped it for the maintainer's own branches.
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Fetch base branch
-        run: |
-          git remote add upstream https://github.com/${{ github.repository }}.git
-          git fetch upstream ${{ github.event.pull_request.base.ref }} --depth=1
       - name: Check DCO sign-off
         run: |
+          set -euo pipefail
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           FAILED=0
