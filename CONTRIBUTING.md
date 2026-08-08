@@ -67,6 +67,22 @@ See `CLAUDE.md` for detailed architecture documentation. Key directories:
 - `eval/` — Crash-triage eval harness (`run_eval.py`) and ground truth (`ground_truth.py`); see `eval/README.md`
 - `scripts/` — Standalone maintenance/CI scripts, e.g. `verify_mcp_server.py` (cross-platform install smoke test)
 
+## Good First Issues
+
+Looking for somewhere to start? A few self-contained opportunities,
+fully written up with context and where to look:
+
+- Automate `docs/eval-results.svg` and the README results table so they
+  can't drift out of sync with CI again
+- Add more crash-type demo GIFs under `docs/demos/` (process is already
+  documented step-by-step)
+- Verify whether `iterator-invalidation`'s Windows allocator fix
+  actually reproduces on Windows CI yet (might just need a doc update)
+
+See [`docs/good-first-issues.md`](docs/good-first-issues.md) for the
+full write-ups, plus one larger `help wanted` item (Windows
+`__fastfail` crash capture) for something more involved.
+
 ## Filing Issues
 
 We use GitHub issue templates for all bug reports and feature requests. When you open a new issue, you'll be prompted to choose a template:
