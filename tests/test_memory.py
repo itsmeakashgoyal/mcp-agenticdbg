@@ -125,6 +125,43 @@ myapp!main+0x42
         sig = extract_crash_signature(self.LLDB_ANALYSIS, "lldb")
         assert sig.exception_type == "EXC_BAD_ACCESS"
 
+    # Captured verbatim from `process status` on real macOS 15.7 arm64
+    # hardware: debugserver reports the raw AArch64 ESR_EL1.EC exception
+    # class instead of "EXC_BAD_ACCESS"/"signal SIGSEGV" the way x86_64
+    # lldb does -- neither _LLDB_EXC_RE nor _LLDB_SIGNAL_RE matches it.
+    LLDB_ARM64_DABORT_ANALYSIS = """\
+* thread #1, stop reason = ESR_EC_DABORT_EL0 (fault address: 0x10007c038)
+    frame #0: 0x0000000100001c70 myapp`MetricsBuffer::finalize_sample(this=0x000000016fdfe440, s=0x000000010007c030) at data.cpp:125:18
+    frame #1: 0x00000001000019c8 myapp`main at main.cpp:160:9
+"""
+
+    def test_extract_lldb_arm64_dabort_maps_to_sigsegv(self):
+        sig = extract_crash_signature(self.LLDB_ARM64_DABORT_ANALYSIS, "lldb")
+        assert sig.exception_type == "SIGSEGV"
+
+    def test_extract_lldb_arm64_unmapped_esr_ec_falls_back_to_raw_label(self):
+        text = "* thread #1, stop reason = ESR_EC_SOMETHING_NEW\n"
+        sig = extract_crash_signature(text, "lldb")
+        assert sig.exception_type == "ESR_EC_SOMETHING_NEW"
+
+    # Captured verbatim from a saved core file on real macOS 15.7 arm64
+    # hardware (double-free.cpp): lldb's "process status" carries no
+    # stop-reason at all for a signal-delivered abort() when loading a core
+    # file after the fact, unlike the ESR_EC hardware-fault cases above.
+    LLDB_ARM64_ABORT_CORE_ANALYSIS = """\
+Process 0 stopped
+(lldb) bt -c 50
+* frame #0: 0x0000000184762388 libsystem_kernel.dylib`__pthread_kill + 8
+    frame #1: 0x000000018479b848 libsystem_pthread.dylib`pthread_kill + 296
+    frame #2: 0x00000001846a49e4 libsystem_c.dylib`abort + 124
+    frame #3: 0x00000001845a8174 libsystem_malloc.dylib`malloc_vreport + 892
+    frame #4: 0x0000000100003a30 double-free`main at double-free.cpp:59:5
+"""
+
+    def test_extract_lldb_arm64_abort_core_maps_to_sigabrt(self):
+        sig = extract_crash_signature(self.LLDB_ARM64_ABORT_CORE_ANALYSIS, "lldb")
+        assert sig.exception_type == "SIGABRT"
+
     def test_extract_cdb_signature(self):
         sig = extract_crash_signature(self.CDB_ANALYSIS, "cdb")
         assert sig.exception_type == "ACCESS_VIOLATION"

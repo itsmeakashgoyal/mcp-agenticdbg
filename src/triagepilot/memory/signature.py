@@ -40,6 +40,29 @@ _GDB_FRAME_FUNC_RE = re.compile(
 _GDB_SIGNAL_RE = re.compile(r"Program received signal\s+(\w+)", re.MULTILINE)
 _LLDB_SIGNAL_RE = re.compile(r"stop reason\s*=\s*signal\s+(\w+)", re.MULTILINE)
 _LLDB_EXC_RE = re.compile(r"stop reason\s*=\s*EXC_(\w+)", re.MULTILINE)
+# On Apple Silicon, lldb's debugserver reports the raw AArch64 ESR_EL1.EC
+# exception-class label as the stop reason (e.g. "ESR_EC_DABORT_EL0") instead
+# of "EXC_BAD_ACCESS" or "signal SIGSEGV" the way x86_64 lldb does -- neither
+# _LLDB_EXC_RE nor _LLDB_SIGNAL_RE matches it, so exception_type silently came
+# back None for every crash on arm64 macOS. Confirmed empirically (macOS
+# 15.7, arm64): a genuine SIGSEGV (write to an unmapped page) and a genuine
+# SIGBUS (write to a PROT_NONE page) both report the identical
+# "ESR_EC_DABORT_EL0" -- lldb's summary text doesn't carry enough detail to
+# tell them apart, so both map to the historically more common case.
+_LLDB_ESR_EC_RE = re.compile(r"stop reason\s*=\s*ESR_EC_(\w+)", re.MULTILINE)
+_LLDB_ESR_EC_TO_SIGNAL = {
+    "DABORT_EL0": "SIGSEGV",  # data abort (bad read/write) from user mode
+    "IABORT_EL0": "SIGSEGV",  # instruction abort (bad jump target) from user mode
+    "PC_ALIGN": "SIGBUS",  # misaligned PC
+    "SP_ALIGN": "SIGBUS",  # misaligned SP
+    "BRK_AARCH64": "SIGTRAP",  # breakpoint instruction
+}
+# libsystem_c's abort() frame, as lldb prints it in a backtrace
+# ("libsystem_c.dylib`abort + 124") -- the one reliable signal that a saved
+# core was terminated by a raised signal (SIGABRT) rather than a hardware
+# fault, since lldb's "process status" carries no stop-reason at all for
+# those when loading a core file (see _extract_exception_type).
+_LLDB_ABORT_FRAME_RE = re.compile(r"`abort\s*\+", re.MULTILINE)
 
 # Skip frames
 _SKIP_FUNCTIONS = frozenset(
@@ -137,6 +160,18 @@ def _extract_exception_type(text: str, debugger_type: str) -> str | None:
         m = _LLDB_SIGNAL_RE.search(text)
         if m:
             return m.group(1)
+        m = _LLDB_ESR_EC_RE.search(text)
+        if m:
+            return _LLDB_ESR_EC_TO_SIGNAL.get(m.group(1), f"ESR_EC_{m.group(1)}")
+        # A signal-delivered abort (as opposed to a hardware fault like the
+        # ESR_EC cases above) carries no stop-reason at all when lldb loads
+        # a *saved core file* rather than live-attaching -- confirmed
+        # empirically (macOS 15.7 arm64): "process status" on a double-free
+        # core just says "Process 0 stopped" with nothing after it, even
+        # though the backtrace clearly shows the abort() chain. Recognize
+        # that chain by its distinctive frame instead.
+        if _LLDB_ABORT_FRAME_RE.search(text):
+            return "SIGABRT"
 
     # Fallback: check for common signal names in text
     for sig in ("SIGSEGV", "SIGABRT", "SIGBUS", "SIGFPE", "SIGILL", "SIGTRAP"):
