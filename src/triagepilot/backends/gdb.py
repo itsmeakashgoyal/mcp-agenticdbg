@@ -35,8 +35,13 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# CLI fallback mode markers
-COMMAND_MARKER = 'printf "GDB_COMMAND_COMPLETED_MARKER\\n"'
+# Base prefix for the CLI fallback path's per-command completion marker.
+# MI mode doesn't need this: it already tags each command with a unique
+# numeric token routed through _pending_map, so a stale/late response for a
+# timed-out command is silently dropped rather than misattributed to the
+# next command. CLI mode has no equivalent protocol-level isolation, so
+# each call gets its own suffixed token (see _next_cli_marker_token())
+# instead of reusing this literal string (same issue fixed in CDBSession).
 COMMAND_MARKER_TOKEN = "GDB_COMMAND_COMPLETED_MARKER"
 
 # MI line patterns
@@ -495,6 +500,9 @@ class GDBSession(DebuggerSession):
         self._cli_buffer: list[str] = []
         self._cli_marker_event = threading.Event()
         self._cli_marker_seen_time = 0.0
+        # Per-call unique marker state -- see COMMAND_MARKER_TOKEN comment.
+        self._cli_marker_counter = 0
+        self._expected_cli_marker_token: str | None = None
 
         # Start reader thread before waiting for init
         self._reader_thread = threading.Thread(
@@ -961,6 +969,20 @@ class GDBSession(DebuggerSession):
                 if self._active_pending is pending:
                     self._active_pending = None
 
+            if not ok:
+                # Not a correctness fix -- MI's per-token routing already
+                # means a late result for *this* (now-abandoned) token is
+                # just dropped, never misattributed to a later command. But
+                # GDB is still busy running it, so the next command would
+                # otherwise silently wait for it to finish on its own.
+                # SIGINT lets GDB abandon it now instead.
+                logger.warning(
+                    "GDB MI command timed out after %ss, sending SIGINT: %r",
+                    effective_timeout,
+                    mi_cmd,
+                )
+                self.send_break()
+
         if not ok:
             raise GDBError(f"MI command timed out after {effective_timeout}s: {mi_cmd!r}")
 
@@ -985,6 +1007,15 @@ class GDBSession(DebuggerSession):
     # CLI mode internals
     # ------------------------------------------------------------------
 
+    def _next_cli_marker_token(self) -> str:
+        """Return a fresh, never-reused CLI-mode completion-marker token.
+
+        Only called while holding ``_command_lock``, so a plain counter is
+        safe without extra locking.
+        """
+        self._cli_marker_counter += 1
+        return f"{COMMAND_MARKER_TOKEN}_{self._cli_marker_counter}"
+
     def _send_cli_command(self, command: str, timeout: int | None = None) -> list[str]:
         if not self.process or not self.process.stdin:
             raise GDBError("GDB process is not running")
@@ -992,13 +1023,15 @@ class GDBSession(DebuggerSession):
         effective_timeout = timeout if timeout is not None else self.timeout
 
         with self._command_lock:
+            token = self._next_cli_marker_token()
             with self._cli_lock:
                 self._cli_buffer.clear()
                 self._cli_marker_event.clear()
                 self._cli_marker_seen_time = 0.0
+                self._expected_cli_marker_token = token
 
             try:
-                self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
+                self.process.stdin.write(f'{command}\nprintf "{token}\\n"\n')
                 self.process.stdin.flush()
             except OSError as exc:
                 raise GDBError(f"Failed to write command: {exc}") from exc
@@ -1007,7 +1040,7 @@ class GDBSession(DebuggerSession):
                 self._activity_wait(command)
             else:
                 if not self._cli_marker_event.wait(timeout=effective_timeout):
-                    raise GDBError(f"Command timed out after {effective_timeout}s: {command!r}")
+                    self._recover_cli_from_timeout(command, effective_timeout)
 
             self._drain_cli()
 
@@ -1017,8 +1050,8 @@ class GDBSession(DebuggerSession):
 
         cleaned: list[str] = []
         for line in raw_lines:
-            if COMMAND_MARKER_TOKEN in line:
-                before = line.split(COMMAND_MARKER_TOKEN, 1)[0].rstrip()
+            if token in line:
+                before = line.split(token, 1)[0].rstrip()
                 if before:
                     cleaned.append(before)
             else:
@@ -1042,7 +1075,48 @@ class GDBSession(DebuggerSession):
             with self._cli_lock:
                 idle = time.monotonic() - self._last_output_time
             if idle >= _ACTIVITY_IDLE_LIMIT_S:
-                raise GDBError(f"Command stalled ({idle:.0f}s idle): {command!r}")
+                self._recover_cli_from_timeout(command, idle)
+
+    def _recover_cli_from_timeout(self, command: str, waited: float | int) -> None:
+        """Interrupt and resynchronize after a CLI-mode command times out.
+
+        GDB is still busy running *command* when the timeout fires --
+        without this, the session is left wedged for the next
+        _send_cli_command() call. Same rationale as
+        CDBSession._recover_from_timeout() / LLDBSession._recover_from_timeout().
+        Not needed for MI mode: its per-token routing already makes a stale
+        late response harmless (see COMMAND_MARKER_TOKEN comment).
+        """
+        logger.warning(
+            "GDB CLI command timed out after %ss, attempting SIGINT recovery: %r",
+            waited,
+            command,
+        )
+        try:
+            self.send_break()
+            self._resync_cli(timeout=10)
+            logger.info("GDB resynchronized after SIGINT; session still usable")
+        except GDBError:
+            logger.warning("GDB did not resynchronize after SIGINT; session may be unusable")
+        raise GDBError(f"Command timed out after {waited}s: {command!r}")
+
+    def _resync_cli(self, timeout: int = 10) -> None:
+        """Send a marker-only round trip to confirm CLI-mode GDB is responsive."""
+        if not self.process or not self.process.stdin:
+            raise GDBError("GDB process is not running")
+        token = self._next_cli_marker_token()
+        with self._cli_lock:
+            self._cli_buffer.clear()
+            self._cli_marker_event.clear()
+            self._cli_marker_seen_time = 0.0
+            self._expected_cli_marker_token = token
+        try:
+            self.process.stdin.write(f'printf "{token}\\n"\n')
+            self.process.stdin.flush()
+        except OSError as exc:
+            raise GDBError(f"Failed to communicate with GDB: {exc}") from exc
+        if not self._cli_marker_event.wait(timeout=timeout):
+            raise GDBError("Timed out waiting for GDB to resynchronize")
 
     def _drain_cli(
         self,
@@ -1139,7 +1213,11 @@ class GDBSession(DebuggerSession):
         with self._cli_lock:
             self._last_output_time = time.monotonic()
             self._cli_buffer.append(line)
-            if COMMAND_MARKER_TOKEN in line:
+            expected = self._expected_cli_marker_token
+            if expected and expected in line:
+                # Compare against the *current* expected token -- a stray
+                # late marker from a previous, already-timed-out command
+                # can't be mistaken for this one's completion.
                 self._cli_marker_seen_time = time.monotonic()
                 self._cli_marker_event.set()
         if not self._initialized:

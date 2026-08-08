@@ -14,7 +14,12 @@ from .base import DebuggerError, DebuggerSession
 
 logger = logging.getLogger(__name__)
 
-COMMAND_MARKER = "script print('LLDB_COMMAND_COMPLETED_MARKER')"
+# Base prefix for the per-command completion marker. Each call gets its own
+# unique token (see LLDBSession._next_marker_token()) instead of reusing
+# this literal string -- a fixed marker means a late echo from a timed-out
+# command can be mistaken for the *next* command's completion, silently
+# attributing stale output to the wrong call (same issue fixed in
+# CDBSession).
 COMMAND_MARKER_TOKEN = "LLDB_COMMAND_COMPLETED_MARKER"
 
 DEFAULT_LLDB_PATHS = [
@@ -97,6 +102,9 @@ class LLDBSession(DebuggerSession):
         self._marker_seen = False
         self._marker_seen_time = 0.0
         self._last_output_time = time.monotonic()
+        # Per-call unique marker state -- see COMMAND_MARKER_TOKEN comment.
+        self._marker_counter = 0
+        self._expected_marker_token: str | None = None
 
         self._reader_thread = threading.Thread(
             target=self._read_output, name="lldb-output-reader", daemon=True
@@ -414,7 +422,12 @@ class LLDBSession(DebuggerSession):
                 with self._lock:
                     self._last_output_time = time.monotonic()
                     self._buffer.append(line)
-                    if COMMAND_MARKER_TOKEN in line:
+                    expected = self._expected_marker_token
+                    if expected and expected in line:
+                        # Compare against the *current* expected token, not
+                        # any COMMAND_MARKER_TOKEN substring -- a stray late
+                        # marker from a previous, already-timed-out command
+                        # can't be mistaken for this one's completion.
                         self._marker_seen = True
                         self._marker_seen_time = time.monotonic()
                         self._ready_event.set()
@@ -446,6 +459,16 @@ class LLDBSession(DebuggerSession):
                 return
             time.sleep(0.02)
 
+    def _next_marker_token(self) -> str:
+        """Return a fresh, never-reused completion-marker token.
+
+        Only called while holding ``_command_lock`` (or during single-
+        threaded ``__init__``), so a plain counter is safe without extra
+        locking.
+        """
+        self._marker_counter += 1
+        return f"{COMMAND_MARKER_TOKEN}_{self._marker_counter}"
+
     def send_command(self, command: str, timeout: int | None = None) -> list[str]:
         if not self.process or not self.process.stdin:
             raise LLDBError("LLDB process is not running")
@@ -454,19 +477,21 @@ class LLDBSession(DebuggerSession):
 
         with self._command_lock:
             self._ready_event.clear()
+            token = self._next_marker_token()
             with self._lock:
                 self._buffer = []
                 self._marker_seen = False
                 self._marker_seen_time = 0.0
+                self._expected_marker_token = token
 
             try:
-                self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
+                self.process.stdin.write(f"{command}\nscript print('{token}')\n")
                 self.process.stdin.flush()
             except OSError as e:
                 raise LLDBError(f"Failed to send command: {e}")
 
             if not self._ready_event.wait(timeout=fixed_timeout):
-                raise LLDBError(f"Command timed out after {fixed_timeout} seconds: {command}")
+                self._recover_from_timeout(command, fixed_timeout)
 
             # Give LLDB a brief chance to finish emitting command output after the marker.
             self._drain_until_quiet()
@@ -478,13 +503,57 @@ class LLDBSession(DebuggerSession):
             # Strip the marker line(s) from output.
             cleaned: list[str] = []
             for line in lines:
-                if COMMAND_MARKER_TOKEN in line:
-                    before = line.split(COMMAND_MARKER_TOKEN, 1)[0].rstrip()
+                if token in line:
+                    before = line.split(token, 1)[0].rstrip()
                     if before:
                         cleaned.append(before)
                     continue
                 cleaned.append(line)
             return cleaned
+
+    def _recover_from_timeout(self, command: str, waited: float | int) -> None:
+        """Interrupt and resynchronize after *command* times out, then raise.
+
+        LLDB is still busy running *command* when a timeout fires -- without
+        this, the session is left wedged: the caller gives up and returns an
+        error, but the next send_command() would send a new command while
+        LLDB is still processing the old one, and its eventual (late) output
+        could land in the wrong place. Sending SIGINT interrupts LLDB, and a
+        follow-up marker-only round trip confirms it actually resynchronized
+        before we hand control back to the caller (same approach as
+        CDBSession._recover_from_timeout()).
+        """
+        logger.warning(
+            "LLDB command timed out after %ss, attempting SIGINT recovery: %s",
+            waited,
+            command,
+        )
+        try:
+            self.send_break()
+            self._resync(timeout=10)
+            logger.info("LLDB resynchronized after SIGINT; session still usable")
+        except LLDBError:
+            logger.warning("LLDB did not resynchronize after SIGINT; session may be unusable")
+        raise LLDBError(f"Command timed out after {waited} seconds: {command}")
+
+    def _resync(self, timeout: int = 10) -> None:
+        """Send a marker-only round trip to confirm LLDB is responsive."""
+        if not self.process or not self.process.stdin:
+            raise LLDBError("LLDB process is not running")
+        self._ready_event.clear()
+        token = self._next_marker_token()
+        with self._lock:
+            self._buffer = []
+            self._marker_seen = False
+            self._marker_seen_time = 0.0
+            self._expected_marker_token = token
+        try:
+            self.process.stdin.write(f"script print('{token}')\n")
+            self.process.stdin.flush()
+        except OSError as e:
+            raise LLDBError(f"Failed to communicate with LLDB: {e}")
+        if not self._ready_event.wait(timeout=timeout):
+            raise LLDBError("Timed out waiting for LLDB to resynchronize")
 
     def send_break(self) -> bool:
         """Send SIGINT to the LLDB process to interrupt execution."""
@@ -504,8 +573,19 @@ class LLDBSession(DebuggerSession):
                 except Exception:
                     pass
                 if self.process.poll() is None:
-                    self.process.terminate()
-                    self.process.wait(timeout=3)
+                    try:
+                        self.process.terminate()
+                        self.process.wait(timeout=3)
+                    except Exception:
+                        pass
+                if self.process.poll() is None:
+                    # terminate() didn't work -- escalate instead of leaving
+                    # the process running in the background.
+                    try:
+                        self.process.kill()
+                        self.process.wait(timeout=3)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning("Error during LLDB shutdown: %s", e)
         finally:
