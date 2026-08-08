@@ -125,7 +125,11 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
             "but build_packet() also stomps the adjacent tracking record's own "
             "chunk header at the exact glibc-computed offset so the corruption is "
             "reliable regardless of allocator/version rounding. Crashed 15/15 "
-            "direct test runs on Ubuntu 22.04 x86_64 glibc 2.35."
+            "direct test runs on Ubuntu 22.04 x86_64 glibc 2.35. That hardening "
+            "calls glibc's malloc_usable_size() and targets glibc's own chunk "
+            "layout, so it does not apply on macOS's libmalloc -- did not "
+            "reproduce in the first macos-eval CI run (real result, not "
+            "guessed; see eval/README.md)."
         ),
     ),
     CrashGroundTruth(
@@ -151,7 +155,11 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
             "watchdog, and padded Session past glibc's mmap threshold so free() "
             "truly unmaps it (a plain small-object UAF often doesn't fault at all "
             "on glibc). Crashed 20/20 direct test runs on Ubuntu 22.04 x86_64 "
-            "glibc 2.35."
+            "glibc 2.35. The mmap-threshold trick is glibc-specific and doesn't "
+            "apply on macOS's libmalloc -- did not reproduce in the first "
+            "macos-eval CI run (real result, not guessed; see eval/README.md). "
+            "Also excluded from the Windows build entirely (raw POSIX pthreads, "
+            "no MSVC equivalent)."
         ),
     ),
     # --- New "advanced" examples ------------------------------------------

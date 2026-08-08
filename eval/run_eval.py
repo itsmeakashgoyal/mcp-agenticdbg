@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from typing import NamedTuple
 
 EVAL_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(EVAL_DIR)
@@ -65,6 +66,7 @@ class ExampleResult:
     source_match: bool = False
     error: str | None = None
     matched_function: str | None = None
+    diagnostic: str | None = None
 
     @property
     def score(self) -> float | None:
@@ -150,14 +152,36 @@ def _build_binary_windows(entry: CrashGroundTruth, out_dir: str) -> str:
     return out
 
 
-def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> tuple[bool, str | None, str | None]:
+class CrashResult(NamedTuple):
+    reproduced: bool
+    signal_name: str | None
+    dump_path: str | None
+    # Raw process output (stdout+stderr merged) from the *last* attempt,
+    # kept only when reproduction fails, so a "not reproduced" result is
+    # something to look at instead of a dead end -- see the Notes section
+    # of the rendered report.
+    diagnostic: str | None = None
+
+
+# Number of trailing characters of process output kept in `diagnostic`.
+# crashdump.h's own print happens right before the process exits, so the
+# tail is what matters; this just bounds how much a chatty example can
+# bloat the report.
+_DIAGNOSTIC_TAIL_CHARS = 1000
+
+
+def _tail(text: str | None) -> str | None:
+    if not text:
+        return text
+    return text if len(text) <= _DIAGNOSTIC_TAIL_CHARS else "..." + text[-_DIAGNOSTIC_TAIL_CHARS:]
+
+
+def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
     """Dispatch to the platform-appropriate crash-and-capture strategy.
 
     Each example self-installs a crash handler via crashdump.h, but *how*
     that handler's output turns into a file this harness can hand to
     create_session() differs per platform -- see each helper's docstring.
-
-    Returns (reproduced, signal_name, dump_path).
     """
     if sys.platform == "win32":
         return _run_until_crash_windows(binary, run_dir, max_attempts)
@@ -166,9 +190,7 @@ def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> tuple[bool,
     return _run_until_crash_linux(binary, run_dir, max_attempts)
 
 
-def _run_until_crash_linux(
-    binary: str, run_dir: str, max_attempts: int
-) -> tuple[bool, str | None, str | None]:
+def _run_until_crash_linux(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
     """Run ``binary`` up to ``max_attempts`` times until a core file appears.
 
     crashdump.h's POSIX branch re-raises the signal with default disposition
@@ -176,16 +198,18 @@ def _run_until_crash_linux(
     itself writes the core file (see eval/README.md for the
     /proc/sys/kernel/core_pattern prerequisite).
     """
+    last_output = None
     for _attempt in range(max_attempts):
         before = set(glob.glob(os.path.join(run_dir, "core*")))
         proc = subprocess.run(
             [binary],
             cwd=run_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             timeout=30,
         )
+        last_output = proc.stdout
         after = set(glob.glob(os.path.join(run_dir, "core*")))
         new_cores = after - before
         signal_name = None
@@ -196,20 +220,18 @@ def _run_until_crash_linux(
                 signal_name = signal_module.Signals(-proc.returncode).name
             except ValueError:
                 signal_name = f"SIG{-proc.returncode}"
-        elif "Caught signal" in (proc.stderr or ""):
-            m = SIGNAL_PATTERN.search(proc.stderr)
+        elif "Caught signal" in (proc.stdout or ""):
+            m = SIGNAL_PATTERN.search(proc.stdout)
             if m:
                 signal_name = m.group(1)
 
         if new_cores:
-            return True, signal_name, sorted(new_cores)[0]
+            return CrashResult(True, signal_name, sorted(new_cores)[0])
 
-    return False, None, None
+    return CrashResult(False, None, None, diagnostic=_tail(last_output))
 
 
-def _run_until_crash_macos(
-    binary: str, run_dir: str, max_attempts: int
-) -> tuple[bool, str | None, str | None]:
+def _run_until_crash_macos(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
     """Run ``binary`` under lldb so it intercepts the crash before macOS's
     ReportCrash agent does, saving a core via ``process save-core``.
 
@@ -224,6 +246,7 @@ def _run_until_crash_macos(
     if not lldb:
         raise RuntimeError("lldb not found on PATH")
 
+    last_output = None
     for attempt in range(max_attempts):
         core_path = os.path.join(run_dir, f"core.{os.path.basename(binary)}.{attempt}")
         proc = subprocess.run(
@@ -244,6 +267,7 @@ def _run_until_crash_macos(
             text=True,
             timeout=30,
         )
+        last_output = proc.stdout
 
         # Signal name comes from crashdump.h's own "[crashdump] Caught
         # signal ..." print (which lldb passes through as the target's
@@ -256,9 +280,9 @@ def _run_until_crash_macos(
                 signal_name = m.group(1)
 
         if os.path.isfile(core_path):
-            return True, signal_name, core_path
+            return CrashResult(True, signal_name, core_path)
 
-    return False, None, None
+    return CrashResult(False, None, None, diagnostic=_tail(last_output))
 
 
 # Windows exit codes that indicate a genuine crash reached crashdump.h's
@@ -276,9 +300,7 @@ _WINDOWS_EXIT_CODE_TO_SIGNAL = {
 }
 
 
-def _run_until_crash_windows(
-    binary: str, run_dir: str, max_attempts: int
-) -> tuple[bool, str | None, str | None]:
+def _run_until_crash_windows(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
     """Run ``binary`` up to ``max_attempts`` times until a .dmp file appears.
 
     crashdump.h's Windows branch installs SetUnhandledExceptionFilter,
@@ -290,6 +312,8 @@ def _run_until_crash_windows(
     exe_dir = os.path.dirname(os.path.abspath(binary))
     dump_dir = os.path.join(exe_dir, "dumps")
 
+    last_output = None
+    last_exit_code = None
     for _attempt in range(max_attempts):
         before = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
         proc = subprocess.run(
@@ -300,15 +324,22 @@ def _run_until_crash_windows(
             text=True,
             timeout=30,
         )
+        last_output = proc.stdout
+        last_exit_code = proc.returncode
         after = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
         new_dumps = sorted(after - before, key=os.path.getmtime)
 
         if new_dumps:
             exit_code = proc.returncode & 0xFFFFFFFF
             signal_name = _WINDOWS_EXIT_CODE_TO_SIGNAL.get(exit_code, f"EXIT_0x{exit_code:08X}")
-            return True, signal_name, new_dumps[-1]
+            return CrashResult(True, signal_name, new_dumps[-1])
 
-    return False, None, None
+    diagnostic = (
+        f"exit_code=0x{last_exit_code & 0xFFFFFFFF:08X}" if last_exit_code is not None else None
+    )
+    if last_output:
+        diagnostic = f"{diagnostic}\n{_tail(last_output)}" if diagnostic else _tail(last_output)
+    return CrashResult(False, None, None, diagnostic=diagnostic)
 
 
 def evaluate_example(
@@ -328,12 +359,14 @@ def evaluate_example(
 
     run_dir = tempfile.mkdtemp(prefix=f"triagepilot-eval-{entry.name}-")
     try:
-        reproduced, signal_name, core_path = run_until_crash(binary, run_dir, max_attempts)
-        result.reproduced = reproduced
-        result.signal_seen = signal_name
+        crash = run_until_crash(binary, run_dir, max_attempts)
+        result.reproduced = crash.reproduced
+        result.signal_seen = crash.signal_name
+        signal_name, core_path = crash.signal_name, crash.dump_path
 
-        if not reproduced:
+        if not crash.reproduced:
             result.error = "crash did not reproduce (no core/dump file after retries)"
+            result.diagnostic = crash.diagnostic
             return result
 
         session = create_session(
@@ -410,6 +443,19 @@ def render_results_md(results: list[ExampleResult], debugger_type: str) -> str:
         lines += ["", "## Notes", ""]
         for r in errors:
             lines.append(f"- `{r.entry.name}`: {r.error}")
+            if r.diagnostic:
+                # <details> instead of embedding raw newlines in the bullet
+                # above -- a multi-line string breaks CommonMark list-item
+                # continuation without careful indentation, this doesn't.
+                lines += [
+                    "  <details><summary>last run's output</summary>",
+                    "",
+                    "  ```",
+                    *(f"  {line}" for line in r.diagnostic.splitlines()),
+                    "  ```",
+                    "  </details>",
+                    "",
+                ]
 
     return "\n".join(lines) + "\n"
 

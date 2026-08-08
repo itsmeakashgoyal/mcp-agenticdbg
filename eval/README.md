@@ -122,16 +122,31 @@ implementations write different artifacts:
   Windows for the same reason `build.ps1` excludes it (raw POSIX
   pthreads, no MSVC equivalent).
 
-  This has **not been verified against a real Windows/CDB run** -- it's
-  implemented from the same crashdump.h/build.ps1 mechanics the Windows
-  CDB smoke test already validates, but this repo's development sandbox
-  has no Windows box to run it on. A plain `abort()` call (glibc's usual
-  mechanism for the `double-free`/`heap-corruption`-style examples) does
-  not raise a structured exception on Windows and so never reaches
-  `SetUnhandledExceptionFilter` -- those examples may legitimately report
-  "not reproduced" here until a real CI run shows what MSVC's release
-  heap actually does for each one, the same way the aarch64 findings
-  above were discovered empirically rather than assumed up front.
+### Known gaps from the first real runs
+
+The first `macos-eval`/`windows-eval` CI runs (this repo's development
+sandbox has no macOS or Windows box to test against beforehand) turned up:
+
+- **macOS: 14/17 reproduced.** `heap-metadata-corruption` and `thread-uaf`
+  did not, expectedly -- their determinism hardening (see the table above)
+  calls glibc's `malloc_usable_size()` and targets glibc's own chunk
+  layout, which doesn't exist on macOS's libmalloc. `iterator-invalidation`
+  also did not reproduce, for a reason not yet root-caused.
+- **Windows: 0/16 reproduced**, including `use-after-free`, which the
+  `windows-cdb-smoke-test` CI job separately proves *does* crash and write
+  a `.dmp` reliably via the exact same crashdump.h mechanism. Getting zero
+  reproductions there rather than a partial result suggests a bug in this
+  harness's own crash-detection path (e.g. a `.dmp`-directory mismatch
+  between where `_build_binary_windows` compiles to and where
+  `_run_until_crash_windows` watches) rather than a fundamental platform
+  limitation -- unconfirmed pending a run with the diagnostic capture
+  below.
+
+Every non-reproduction now carries the crashing process's own last-attempt
+output (crashdump.h's prints, or a bare exit code if nothing printed) in
+`results.md`'s Notes section under a collapsible "last run's output"
+block, specifically so findings like the above can be root-caused from the
+CI artifact instead of guessed at.
 
 ## CI
 
