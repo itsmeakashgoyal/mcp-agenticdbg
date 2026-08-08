@@ -130,10 +130,14 @@ output (crashdump.h's prints, or a bare exit code if nothing printed) in
 block, so findings like the ones below were root-caused from the CI
 artifact, not guessed at.
 
-### macOS: was 14/17 at 64%, now 16/16 at 100%
+### macOS: was 14/17 at 64%, now 16/16 reproduced
 
-Root-caused directly on real macOS hardware (arm64, macOS 15.7) -- two
-separate, unrelated bugs were dragging the score down, not one:
+Root-caused directly on real macOS hardware (arm64, macOS 15.7) and,
+subsequently, real macOS CI (arm64, macOS 26) -- these are two *different*
+lldb builds on two different OS versions, and each surfaced its own
+findings; don't assume a fix verified on one holds on the other without
+checking. At least four separate, unrelated issues were dragging the
+score down, not one:
 
 **1. Two examples never crashed at all.** `heap-metadata-corruption`,
 `thread-uaf`, and `iterator-invalidation` all ran to completion with exit
@@ -200,6 +204,48 @@ system for any Apple Silicon user, not just the eval), and the two
 example fixes are the same category of example-program determinism the
 aarch64 findings above already document, just closed instead of left
 open.
+
+**3. On macOS 26 specifically, three more examples reported "signal
+MISS."** `use-after-free`, `double-free`, and `heap-corruption` all
+reproduced fine but scored a mismatched signal on real macOS 26 CI --
+different symptom, different root cause from #2 above. A newer libmalloc
+("xzone malloc", judging by the `mfm_alloc`/`mfm_free`/`xzm_*` symbol
+names) now embeds a `brk` instruction as an inline hardware assertion in
+its fast malloc/free paths, catching heap-safety violations *before* any
+ordinary fault or `abort()` would occur -- reported as
+`ESR_EC_BRK_AARCH64`, a code that isn't in the `_LLDB_ESR_EC_TO_SIGNAL`
+table added for finding #2. Confirmed from CI's captured
+crash_info+analysis (see the "Signal/frame/source mismatches" report
+section this investigation added to `run_eval.py`): all three land
+inside `libsystem_malloc.dylib` at the trap point, and `double-free`'s
+crash message is literally *"BUG IN LIBMALLOC: malloc assertion
+'main_address' failed"*. Fixed by mapping `ESR_EC_BRK_AARCH64` to
+`SIGABRT` *only* when `libsystem_malloc.dylib` appears near the stop
+reason (a breakpoint trap from unrelated user code -- a compiler-inserted
+`__builtin_trap()`, an ASan check -- reports the same generic ARM64
+exception class and should NOT be guessed as SIGABRT). `use-after-free`'s
+`expected_signals` gains `SIGABRT` alongside `SIGSEGV` since this is what
+genuinely happens on this allocator now: the stale write's corruption is
+only caught later, inside a *subsequent* `malloc()` call's internal
+consistency check, not by the stale write itself faulting.
+
+**4. `exception-in-destructor-terminate` lost its backtrace entirely on
+macOS 26.** Frame and source both miss (33% instead of 100%) -- not a
+signal-detection issue like the others; lldb's unwind stops dead at
+``libc++abi.dylib`demangling_terminate_handler()`` with no user-code frame
+on any thread. Investigated and ruled out core-completeness as the cause:
+`process save-core`'s default style already matches `--style
+modified-memory` (confirmed byte-identical locally), and `--style full`
+produces a ~5 GB core per example on this machine -- utterly impractical
+across 16 examples in CI, and wouldn't even be expected to help, since
+system libraries resolve from disk on the same machine regardless of
+core style. This looks like a genuine lldb/libc++abi compact-unwind gap
+specific to this double-exception-during-destructor-unwind call chain on
+macOS 26's build of libc++abi -- not fixed here (see `ground_truth.py`'s
+notes for this example). Worth another look if a future macOS/Xcode
+update changes lldb's unwinder, or if someone wants to dig into whether
+an lldb setting can force DWARF-based unwinding through this specific
+frame.
 
 ### Windows: was 0/16, now 8/16 after two fixes
 
