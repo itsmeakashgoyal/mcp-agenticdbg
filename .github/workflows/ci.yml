@@ -65,16 +65,45 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # shell: bash works on windows-latest too (Git Bash ships on GitHub's
+      # Windows runners), so every step below tees its combined
+      # stdout/stderr into ci-logs/ with one consistent syntax across all
+      # three OSes. `set -euo pipefail` keeps `tee` from swallowing the
+      # underlying command's exit code, so a failure still fails the step.
       - name: Install (pip, no extras -- matches README quick start)
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+          set -euo pipefail
+          mkdir -p ci-logs
+          python -m pip install --upgrade pip 2>&1 | tee ci-logs/01-pip-upgrade.log
+          pip install -e . 2>&1 | tee ci-logs/02-pip-install.log
+      - name: Capture environment info
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          { python --version; pip --version; pip freeze; } > ci-logs/00-environment.log 2>&1 || true
       - name: CLI entry point smoke test
-        run: triagepilot --help
+        shell: bash
+        run: |
+          set -euo pipefail
+          triagepilot --help 2>&1 | tee ci-logs/03-cli-help.log
       - name: Module invocation smoke test
-        run: python -m triagepilot --help
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m triagepilot --help 2>&1 | tee ci-logs/04-module-invocation.log
       - name: MCP protocol handshake smoke test
-        run: python scripts/verify_mcp_server.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_mcp_server.py 2>&1 | tee ci-logs/05-mcp-handshake.log
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-install-pip-logs-${{ matrix.os }}
+          path: ci-logs/
 
   verify-install-uv:
     name: Verify uv Install (${{ matrix.os }})
@@ -90,13 +119,38 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install (uv, no dev/extras -- matches README quick start)
-        run: uv sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          uv sync 2>&1 | tee ci-logs/01-uv-sync.log
+      - name: Capture environment info
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          { uv run python --version; uv pip list; } > ci-logs/00-environment.log 2>&1 || true
       - name: CLI entry point smoke test
-        run: uv run triagepilot --help
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run triagepilot --help 2>&1 | tee ci-logs/02-cli-help.log
       - name: Module invocation smoke test
-        run: uv run python -m triagepilot --help
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python -m triagepilot --help 2>&1 | tee ci-logs/03-module-invocation.log
       - name: MCP protocol handshake smoke test
-        run: uv run python scripts/verify_mcp_server.py --command "uv run triagepilot"
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python scripts/verify_mcp_server.py --command "uv run triagepilot" 2>&1 | tee ci-logs/04-mcp-handshake.log
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-install-uv-logs-${{ matrix.os }}
+          path: ci-logs/
 
   eval:
     name: Crash-Triage Eval
