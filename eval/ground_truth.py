@@ -129,7 +129,13 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
             "calls glibc's malloc_usable_size() and targets glibc's own chunk "
             "layout, so it does not apply on macOS's libmalloc -- did not "
             "reproduce in the first macos-eval CI run (real result, not "
-            "guessed; see eval/README.md)."
+            "guessed; see eval/README.md). Confirmed on real macOS hardware "
+            "that the technique's premise doesn't hold there at all: "
+            "conn_record isn't even allocated after buf in memory (it landed "
+            "at a *lower* address), so there's no adjacent header to stomp -- "
+            "no safe portable fix found. Excluded from the eval on macOS "
+            "entirely (see run_eval.py's _PLATFORM_EXCLUSIONS) rather than "
+            "counted as a non-reproduction."
         ),
     ),
     CrashGroundTruth(

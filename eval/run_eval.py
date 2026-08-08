@@ -55,6 +55,27 @@ from triagepilot.tools.debugger_tools import locate_faulting_source  # noqa: E40
 
 SIGNAL_PATTERN = re.compile(r"\b(SIG[A-Z]+)\b")
 
+# Examples that structurally cannot reproduce their crash on a given
+# platform -- not flaky, just built around a mechanism that platform's
+# toolchain/allocator doesn't have. (platform_label, excluded_names, reason)
+_PLATFORM_EXCLUSIONS: dict[str, tuple[str, set[str], str]] = {
+    "win32": (
+        "Windows",
+        {"thread-uaf"},
+        "raw POSIX pthreads, no MSVC equivalent -- already excluded from "
+        "examples/windows/build.ps1 for the same reason (see its comments)",
+    ),
+    "darwin": (
+        "macOS",
+        {"heap-metadata-corruption"},
+        "its chunk-header-stomp technique calls glibc's malloc_usable_size() "
+        "and depends on conn_record landing immediately after buf in memory -- "
+        "confirmed on real macOS hardware that libmalloc doesn't even allocate "
+        "them in that relative order, so the technique's premise doesn't hold "
+        "there (see eval/README.md's macOS section)",
+    ),
+}
+
 
 @dataclass
 class ExampleResult:
@@ -518,18 +539,13 @@ def main() -> int:
     _try_raise_core_ulimit()
 
     entries = GROUND_TRUTH
-    if sys.platform == "win32":
-        # thread-uaf.cpp uses raw POSIX pthreads with no MSVC equivalent --
-        # already excluded from examples/windows/build.ps1 for the same
-        # reason (see its comments).
-        excluded = {"thread-uaf"}
+    platform_exclusion = _PLATFORM_EXCLUSIONS.get(sys.platform)
+    if platform_exclusion:
+        platform_label, excluded, reason = platform_exclusion
         skipped = [e.name for e in entries if e.name in excluded]
         entries = [e for e in entries if e.name not in excluded]
         for name in skipped:
-            print(
-                f"[eval] skipping {name} on Windows (raw POSIX pthreads, no MSVC equivalent)",
-                file=sys.stderr,
-            )
+            print(f"[eval] skipping {name} on {platform_label} ({reason})", file=sys.stderr)
     if args.only:
         entries = [e for e in entries if e.name in args.only]
 
