@@ -43,7 +43,7 @@
   <rect x="190" y="152" width="360" height="22" fill="#f2f2f2" rx="4" />
   <rect x="190" y="152" width="360" height="22" fill="#2da44e" rx="4" />
   <text x="566" y="168" class="value" fill="#2da44e">16/16 reproduced</text>
-  <text x="566" y="184" class="sublabel">96% accuracy</text>
+  <text x="566" y="184" class="sublabel">100% accuracy</text>
 
   <!-- Row 3: CDB / Windows -->
   <text x="24" y="222" class="label">CDB</text>
