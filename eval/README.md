@@ -78,37 +78,27 @@ intercepts signals; use `examples/macos/gen_core_mac.sh`).
 
 ## Known example reliability
 
-Direct testing surfaced three examples from the original set of ten that did
-not reproduce their crash in 5/5 attempts on Ubuntu 22.04 **aarch64**, and
-one whose signal is architecture-dependent. These are marked
-`known_flaky=True` / documented in `ground_truth.py` rather than silently
-ignored:
+Direct testing on Ubuntu 22.04 **aarch64** originally surfaced three examples
+that did not reproduce their crash in 5/5 attempts, plus one whose signal is
+architecture-dependent. The three non-reproducing examples have since been
+hardened (see `ground_truth.py` notes for each) to remove their dependence on
+allocator/scheduler luck:
+
+| Example | Fix | Result after hardening |
+|---|---|---|
+| `heap-corruption` | Corrupts a neighboring chunk's own size header at the exact glibc-computed offset (`malloc_usable_size`) instead of a fixed poison overwrite that may not land anywhere validated. | Crashed 20/20 direct test runs on Ubuntu 22.04 x86_64 glibc 2.35. |
+| `heap-metadata-corruption` | Same technique, applied to a small tracking record deliberately allocated adjacent to the packet buffer, on top of the original off-by-one accounting bug. | Crashed 15/15 direct test runs. |
+| `thread-uaf` | Replaced the `usleep()` timing guess with an explicit atomic request-counter handshake between worker and watchdog, and padded `Session` past glibc's mmap threshold so `free()` truly unmaps it (small-object UAFs often don't fault at all on glibc). | Crashed 20/20 direct test runs. |
+
+One example still has an architecture-dependent (not flaky) signal:
 
 | Example | Finding |
 |---|---|
-| `heap-corruption` | Did not crash in 5/5 runs on aarch64; the 16-byte overrun didn't corrupt a field this glibc/arch combination validates on free(). Likely more reliable on x86_64. |
-| `heap-metadata-corruption` | Same as above -- did not crash in 5/5 runs on aarch64. |
-| `thread-uaf` | Timing-dependent race between worker/watchdog threads; the `usleep()`-based window did not line up in 5/5 runs under this sandbox's scheduler. |
-| `stack-buffer-overrun` | Crashed reliably, but with `SIGBUS` on aarch64 vs. the `SIGSEGV` implied by the original (Windows-oriented) header comment -- ARM enforces stricter alignment faults on indirect jumps to garbage addresses than x86_64 does. |
+| `stack-buffer-overrun` | Crashed reliably, but with `SIGBUS` on aarch64 vs. the `SIGSEGV` implied by the original (Windows-oriented) header comment -- ARM enforces stricter alignment faults on indirect jumps to garbage addresses than x86_64 does. `detached-thread-dangling-stack` has the same aarch64/x86_64 signal split. Both list both signals in `expected_signals`. |
 
-The other thirteen examples (including all four new "advanced" ones and all
-three new "multithreading" ones added alongside this harness) reproduced
-their documented signal in every run tested -- including the three new
-multithreading examples, each stress-tested 5-8 times:
-
-| Example | Result |
-|---|---|
-| `concurrent-vector-race` | Crashed 6/6 runs (SIGSEGV or SIGABRT -- genuine data race, signal varies) |
-| `lock-order-inversion-deadlock` | Deadlocked + watchdog-aborted 6/6 runs (fully deterministic by construction, not a race) |
-| `detached-thread-dangling-stack` | Crashed 8/8 runs (SIGBUS on aarch64; expect SIGSEGV on x86_64) |
-
-None of the non-reproduction findings reflect a TriagePilot bug -- it's
-example-program determinism, worth hardening separately (e.g. forcing
-`heap-corruption`'s overrun to cross an mmap threshold the way
-`iterator-invalidation.cpp` does, or replacing `thread-uaf`'s `usleep()`
-handshake with the same explicit-barrier technique
-`lock-order-inversion-deadlock.cpp` and `concurrent-vector-race.cpp` use to
-stay deterministic/high-probability instead of sleep-timing-dependent).
+All seventeen examples now reproduce their documented signal reliably in
+direct testing; none of the original non-reproduction findings reflected a
+TriagePilot bug -- it was example-program determinism.
 
 ## CI
 

@@ -1,23 +1,39 @@
 /*
  * thread-uaf.cpp
  *
- * Crash type  : SIGSEGV — write to freed heap memory from a worker thread
- * Mechanism   : A "RequestHandler" owns a Session object.  A "watchdog"
- *               thread detects that the session has timed out and frees it.
- *               A "worker" thread that holds a raw pointer to the same
- *               session then calls session->record() — writing into freed
- *               (and recycled) memory.
+ * Crash type  : SIGSEGV — write to unmapped heap memory from a worker thread
+ * Mechanism   : A "SessionPool" owns a Session object. A "watchdog" thread
+ *               detects that the session has timed out and frees it. A
+ *               "worker" thread that holds a raw pointer to the same
+ *               session then calls session->record() — writing into memory
+ *               that has since been unmapped.
+ *
+ * Reliability note: a plain small-object use-after-free frequently does
+ * *not* crash on glibc -- the freed bytes are usually still mapped and
+ * untouched, so a stale write "succeeds" silently. To make this demo fault
+ * immediately and deterministically, `Session` is padded well past glibc's
+ * mmap threshold (the same technique iterator-invalidation.cpp uses for its
+ * std::vector reallocation), so new/delete on it go through mmap()/munmap()
+ * directly -- once freed, the memory is truly gone, not just returned to a
+ * reusable free list.
+ *
+ * The watchdog and worker also synchronise through an explicit atomic
+ * request counter (the same style concurrent-vector-race.cpp and
+ * lock-order-inversion-deadlock.cpp use) instead of guessed usleep()
+ * windows, so the watchdog always closes the session at the same point in
+ * the worker's progress, regardless of scheduler timing.
  *
  * Complexity  : Two threads; the crash appears in a completely different
- *               thread from the one that called delete.  The corrupted
- *               write dereferences garbage pointers several levels deep.
+ *               thread from the one that called delete. The corrupted
+ *               write dereferences a pointer to memory the OS has already
+ *               unmapped.
  *
  * What to look for in GDB:
  *   - `info threads` shows 2 threads; the crashing one is the worker
  *   - `thread apply all bt` reveals both stacks side-by-side
  *   - Worker stack: main → run_workers → process_request → session->record
- *   - Watchdog stack: already returned from timeout_session / is in pthread_join
- *   - `frame N; print *session` in the worker frame shows corrupted fields
+ *   - Watchdog stack: already returned from pool->close / is in pthread_join
+ *   - `frame N; print s` in the worker frame shows the now-dangling pointer
  *   - Root cause: shared raw pointer with no ownership / no synchronisation
  *
  * Fix hint:
@@ -28,7 +44,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <unistd.h>
+#include <sched.h>
+#include <atomic>
 #include "crashdump.h"
 
 // ---------------------------------------------------------------------------
@@ -41,17 +58,23 @@ struct Metric {
     int    count;
 };
 
+// Padded well past glibc's default mmap threshold (128 KiB) so that
+// new/delete on a Session go through mmap/munmap directly: once freed, the
+// memory is truly unmapped, and a stale access faults immediately instead
+// of silently succeeding on a still-mapped, not-yet-reused free-list entry.
 struct Session {
     int    id;
     char   remote_addr[64];
     Metric metrics[8];
     int    metric_count;
     int    request_count;
+    char   _pad[192 * 1024];
 
     void record(const char *metric_name, double value) {
-        // BUG: called after the Session has been freed; fields are garbage
+        // BUG: called after the Session has been freed (and unmapped) --
+        // this write faults.
         if (metric_count >= 8) return;
-        Metric *m = &metrics[metric_count++];           // crash here — object freed
+        Metric *m = &metrics[metric_count++];           // crash here — memory unmapped
         snprintf(m->name, sizeof(m->name), "%s", metric_name);
         m->value = value;
         m->count = 1;
@@ -90,7 +113,7 @@ struct SessionPool {
         printf("[pool] closing session %d @ %p\n", s->id, (void*)s);
         int idx = s->id % 32;
         slots[idx] = nullptr;
-        delete s;                   // <-- BUG: worker still holds raw pointer
+        delete s;                   // <-- BUG: worker still holds raw pointer; unmaps the memory
     }
 };
 
@@ -99,21 +122,18 @@ struct SessionPool {
 // ---------------------------------------------------------------------------
 
 struct WorkerCtx {
-    Session      *session;          // raw pointer — will dangle after watchdog fires
-    SessionPool  *pool;
-    pthread_mutex_t *start_mutex;
-    pthread_cond_t  *start_cond;
-    bool            *ready;
+    Session          *session;
+    SessionPool      *pool;
+    std::atomic<int>  requests_done{0};   // explicit progress barrier -- no usleep guessing
+    std::atomic<bool> session_closed{false};
 };
 
 static void process_request(Session *s, const char *path, const char *metric) {
     s->log_request(path);
-    // simulate some work
-    for (volatile int i = 0; i < 100000; i++) {}
-    s->record(metric, 1.0);         // crash lands here after watchdog fires
+    s->record(metric, 1.0);         // crash lands here once the session is freed
 }
 
-static void run_workers(Session *s) {
+static void run_workers(Session *s, WorkerCtx *ctx) {
     const char *routes[] = {
         "/api/health", "/api/v1/users", "/api/v1/orders", "/api/v1/products", nullptr
     };
@@ -121,36 +141,39 @@ static void run_workers(Session *s) {
         "latency_ms", "latency_ms", "db_queries", "cache_hits", nullptr
     };
     for (int i = 0; routes[i]; i++) {
-        usleep(20000);              // 20 ms between requests
         process_request(s, routes[i], metrics[i]);
+        int done = ctx->requests_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+
+        if (done == 2) {
+            // Block here until the watchdog has actually closed the session
+            // -- a real synchronisation point, not a guessed sleep -- so
+            // request #3 always runs after the session is freed, on every
+            // run, regardless of scheduler timing.
+            while (!ctx->session_closed.load(std::memory_order_acquire)) {
+                sched_yield();
+            }
+        }
     }
 }
 
 void *worker_thread(void *arg) {
     WorkerCtx *ctx = (WorkerCtx *)arg;
-
-    // Signal that we have started and are using the session
-    pthread_mutex_lock(ctx->start_mutex);
-    *ctx->ready = true;
-    pthread_cond_signal(ctx->start_cond);
-    pthread_mutex_unlock(ctx->start_mutex);
-
-    run_workers(ctx->session);      // uses session for ~100 ms total
+    run_workers(ctx->session, ctx);
     return nullptr;
 }
 
 void *watchdog_thread(void *arg) {
     WorkerCtx *ctx = (WorkerCtx *)arg;
 
-    // Wait until worker has started
-    pthread_mutex_lock(ctx->start_mutex);
-    while (!(*ctx->ready))
-        pthread_cond_wait(ctx->start_cond, ctx->start_mutex);
-    pthread_mutex_unlock(ctx->start_mutex);
+    // Wait until exactly 2 requests have completed -- a real synchronisation
+    // point instead of a guessed sleep duration, so the close always lands
+    // between the 2nd and 3rd request regardless of scheduler timing.
+    while (ctx->requests_done.load(std::memory_order_acquire) < 2) {
+        sched_yield();
+    }
 
-    // Fire mid-way through the worker's loop (after 2nd request)
-    usleep(55000);                  // 55 ms — lands between 3rd and 4th request
-    ctx->pool->close(ctx->session); // session deleted; worker's raw ptr now dangles
+    ctx->pool->close(ctx->session);  // session freed (and unmapped); worker's raw ptr now dangles
+    ctx->session_closed.store(true, std::memory_order_release);  // release the worker
     return nullptr;
 }
 
@@ -163,11 +186,9 @@ int main(void) {
     SessionPool pool;
     Session *s = pool.open("10.0.0.42");
 
-    pthread_mutex_t mu  = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t  cv  = PTHREAD_COND_INITIALIZER;
-    bool            rdy = false;
-
-    WorkerCtx ctx = { s, &pool, &mu, &cv, &rdy };
+    WorkerCtx ctx;
+    ctx.session = s;
+    ctx.pool = &pool;
 
     pthread_t wdog, worker;
     pthread_create(&worker, nullptr, worker_thread,   &ctx);

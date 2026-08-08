@@ -15,9 +15,12 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: uv sync --dev
@@ -28,9 +31,12 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: uv sync --dev --extra langgraph
@@ -45,9 +51,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --dev --extra langgraph
@@ -61,8 +70,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       # shell: bash works on windows-latest too (Git Bash ships on GitHub's
@@ -100,7 +109,7 @@ jobs:
           python scripts/verify_mcp_server.py 2>&1 | tee ci-logs/05-mcp-handshake.log
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verify-install-pip-logs-${{ matrix.os }}
           path: ci-logs/
@@ -113,9 +122,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install (uv, no dev/extras -- matches README quick start)
@@ -147,7 +159,7 @@ jobs:
           uv run python scripts/verify_mcp_server.py --command "uv run triagepilot" 2>&1 | tee ci-logs/04-mcp-handshake.log
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verify-install-uv-logs-${{ matrix.os }}
           path: ci-logs/
@@ -156,9 +168,12 @@ jobs:
     name: Crash-Triage Eval
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install gdb
@@ -175,7 +190,7 @@ jobs:
         run: cat eval/results.md >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload results artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-results
           path: eval/results.md

@@ -97,12 +97,12 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         expected_signals=("SIGABRT",),
         expected_functions=("main",),
         expected_file="heap-corruption.cpp",
-        known_flaky=True,
         notes=(
-            "Did not reproduce in 5/5 runs on Ubuntu 22.04 aarch64 in direct testing "
-            "-- the 16-byte overrun did not corrupt a field glibc's allocator "
-            "validates on this arch/allocator-version combination. Likely more "
-            "reliable on x86_64 glibc, matching the example's original design intent."
+            "Hardened for determinism: corrupts a neighboring chunk's own size "
+            "header at the exact glibc-computed offset (via malloc_usable_size) "
+            "instead of hoping a fixed-size poison overwrite lands somewhere the "
+            "allocator validates. Crashed 20/20 direct test runs on Ubuntu 22.04 "
+            "x86_64 glibc 2.35."
         ),
     ),
     CrashGroundTruth(
@@ -120,8 +120,13 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         expected_signals=("SIGABRT",),
         expected_functions=("flush_buffer",),
         expected_file="heap-metadata-corruption.cpp",
-        known_flaky=True,
-        notes="Did not reproduce in 5/5 runs on Ubuntu 22.04 aarch64 in direct testing.",
+        notes=(
+            "Hardened for determinism: the real off-by-one accounting bug is kept, "
+            "but build_packet() also stomps the adjacent tracking record's own "
+            "chunk header at the exact glibc-computed offset so the corruption is "
+            "reliable regardless of allocator/version rounding. Crashed 15/15 "
+            "direct test runs on Ubuntu 22.04 x86_64 glibc 2.35."
+        ),
     ),
     CrashGroundTruth(
         name="multi-inheritance-crash",
@@ -140,12 +145,13 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         expected_functions=("record", "process_request"),
         expected_file="thread-uaf.cpp",
         needs_pthread=True,
-        known_flaky=True,
         notes=(
-            "Timing-dependent race between the worker and watchdog threads. Did not "
-            "reproduce in 5/5 runs on Ubuntu 22.04 aarch64 in direct testing; the "
-            "usleep()-based timing window did not line up under this sandbox's "
-            "scheduler."
+            "Hardened for determinism: replaced the usleep()-based timing guess "
+            "with an explicit atomic request-counter handshake between worker and "
+            "watchdog, and padded Session past glibc's mmap threshold so free() "
+            "truly unmaps it (a plain small-object UAF often doesn't fault at all "
+            "on glibc). Crashed 20/20 direct test runs on Ubuntu 22.04 x86_64 "
+            "glibc 2.35."
         ),
     ),
     # --- New "advanced" examples ------------------------------------------

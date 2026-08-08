@@ -18,7 +18,7 @@ jobs:
       # or manually add an upstream remote. This also fixes a bug in the
       # previous version, which only ran this check for fork PRs and silently
       # skipped it for the maintainer's own branches.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Check DCO sign-off
