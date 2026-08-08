@@ -1,5 +1,16 @@
 # mcp-agenticdbg (TriagePilot)
 
+[![CI](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml/badge.svg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml)
+[![DCO](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/dco.yml/badge.svg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/dco.yml)
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-blue)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![MCP](https://img.shields.io/badge/MCP-1.17%2B-6E56CF)](https://modelcontextprotocol.io/)
+
+[![Windows](https://img.shields.io/badge/Windows-CDB%2FWinDbg-0078D6?logo=windows11&logoColor=white)](#platform-support)
+[![Linux](https://img.shields.io/badge/Linux-GDB-FCC624?logo=linux&logoColor=black)](#platform-support)
+[![macOS](https://img.shields.io/badge/macOS-LLDB-000000?logo=apple&logoColor=white)](#platform-support)
+[![Last Commit](https://img.shields.io/github/last-commit/itsmeakashgoyal/mcp-agenticdbg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/commits/master)
+
 Grounding AI debugging in runtime truth for crash dumps.
 
 `mcp-agenticdbg` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that lets AI assistants triage crashes using real debugger output, not guesswork from logs alone.
