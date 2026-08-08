@@ -1,6 +1,6 @@
 # Crash Examples
 
-Ten intentional crash programs for testing the TriagePilot MCP server. Each generates a crash dump with full debug symbols so you can practice triage from build to fix.
+Seventeen intentional crash programs for testing the TriagePilot MCP server. Each generates a crash dump with full debug symbols so you can practice triage from build to fix.
 
 ## Pick Your Platform
 
@@ -28,6 +28,26 @@ All crash programs live in [`common/`](common/) and are shared across platforms.
 | `heap-metadata-corruption` | Off-by-one corrupts heap metadata; crash in `free()` | Complex |
 | `multi-inheritance-crash` | Wrong C-style cast + multiple inheritance vtable crash | Complex |
 | `thread-uaf` | Multi-threaded use-after-free race condition | Complex |
+| `format-string-crash` | User data reaches `printf()` as the format string (CWE-134) | Advanced |
+| `iterator-invalidation` | `std::vector` growth frees a cached pointer to an element | Advanced |
+| `exception-in-destructor-terminate` | Destructor throws mid-unwind &rarr; `std::terminate()` | Advanced |
+| `cyclic-refcount-stack-overflow` | Reparent bug creates a cycle; recursive destructor loops forever | Advanced |
+| `concurrent-vector-race` | Four threads push_back into one unlocked `std::vector` | Multithreading |
+| `lock-order-inversion-deadlock` | Two threads lock two mutexes in opposite order; watchdog aborts the hang | Multithreading |
+| `detached-thread-dangling-stack` | Detached thread holds a raw pointer into a returned stack frame | Multithreading |
+
+The `Advanced` tier crashes without any explicit `free()`/`delete` at the
+crash site at all -- the bug is in container growth semantics, C++ exception
+rules, or graph structure, so the top stack frame alone doesn't explain the
+root cause the way it does for the `Simple` tier.
+
+The `Multithreading` tier (alongside `thread-uaf` in `Complex`) requires
+correlating *multiple* thread stacks at once -- `info threads` /
+`thread apply all bt` -- since no single thread's backtrace explains the
+bug in isolation. `lock-order-inversion-deadlock` is unusual in that
+nothing actually faults: the "crash" is a watchdog-triggered `abort()` used
+to make a hang analyzable, the same technique real services use in
+production.
 
 ## How It Works
 

@@ -63,6 +63,8 @@ See `CLAUDE.md` for detailed architecture documentation. Key directories:
 - `src/triagepilot/tools/` — MCP tool implementations
 - `src/triagepilot/graph/` — Optional LangGraph triage workflow
 - `tests/` — Test suite
+- `examples/` — Intentional crash programs used for manual triage practice and the eval harness
+- `eval/` — Crash-triage eval harness (`run_eval.py`) and ground truth (`ground_truth.py`); see `eval/README.md`
 
 ## Filing Issues
 

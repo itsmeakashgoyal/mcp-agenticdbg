@@ -161,7 +161,7 @@ All options are also configurable via environment variables with the `TRIAGEPILO
 
 ## Example Crash Programs
 
-The `examples/` folder contains ten C++ programs that intentionally crash, covering stack overflow, use-after-free, double-free, vtable corruption, heap corruption, and more.
+The `examples/` folder contains seventeen C++ programs that intentionally crash, covering stack overflow, use-after-free, double-free, vtable corruption, heap corruption, format-string bugs, STL iterator invalidation, exception-safety violations, cyclic data structures, unsynchronized concurrent containers, lock-order-inversion deadlocks, dangling stack references across detached threads, and more.
 
 ```bash
 # Build
@@ -171,6 +171,24 @@ cd examples && .\build.ps1         # Windows (MSVC)
 # Generate core dump (macOS)
 ./gen_core_mac.sh use-after-free   # writes build/out/core.use-after-free
 ```
+
+## Evaluation
+
+`eval/` contains a benchmark that runs every example above through
+TriagePilot's real analysis code path and scores the result against known
+ground truth (correct signal, correct faulting frame, correct source file).
+It measures the deterministic debugger-grounding layer that every other
+tool call and the LangGraph LLM reasoning step both depend on.
+
+```bash
+uv run python eval/run_eval.py
+```
+
+CI runs this on every push (`.github/workflows/ci.yml` → `eval` job) on a
+real `ubuntu-latest` runner and publishes the results table to the job
+summary and as a build artifact — see the [Actions tab](../../actions) for
+the current numbers. See [`eval/README.md`](eval/README.md) for scope,
+methodology, and known example-reliability caveats.
 
 ## Troubleshooting
 

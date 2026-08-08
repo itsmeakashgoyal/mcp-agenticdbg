@@ -54,6 +54,10 @@ SOURCES=(
     deep-callchain-nullptr.cpp
     heap-metadata-corruption.cpp
     multi-inheritance-crash.cpp
+    format-string-crash.cpp
+    iterator-invalidation.cpp
+    exception-in-destructor-terminate.cpp
+    cyclic-refcount-stack-overflow.cpp
 )
 
 for src in "${SOURCES[@]}"; do
@@ -65,6 +69,9 @@ done
 # Sources requiring extra link flags
 THREADED_SOURCES=(
     thread-uaf.cpp
+    concurrent-vector-race.cpp
+    lock-order-inversion-deadlock.cpp
+    detached-thread-dangling-stack.cpp
 )
 
 for src in "${THREADED_SOURCES[@]}"; do

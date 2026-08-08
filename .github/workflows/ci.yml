@@ -52,3 +52,31 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --dev --extra langgraph
       - run: uv run pytest -x --tb=short
+
+  eval:
+    name: Crash-Triage Eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install gdb
+        run: sudo apt-get update && sudo apt-get install -y gdb
+      - name: Allow core dumps (disable apport redirection)
+        run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern
+          ulimit -c unlimited
+      - run: uv sync --dev
+      - name: Run eval harness
+        run: uv run python eval/run_eval.py
+      - name: Publish results to job summary
+        if: always()
+        run: cat eval/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval/results.md

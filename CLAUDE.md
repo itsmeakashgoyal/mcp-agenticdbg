@@ -49,6 +49,15 @@ cd examples/macos && bash build.sh       # macOS
 cd examples\windows && .\build.ps1       # Windows (MSVC)
 ```
 
+### Running the Crash-Triage Eval
+```bash
+uv run python eval/run_eval.py           # Requires gdb (Linux) or lldb (macOS) on PATH
+uv run python eval/run_eval.py --only use-after-free double-free
+```
+Scores TriagePilot's deterministic analysis (signal, faulting frame, source
+localization) against `eval/ground_truth.py` for all 17 examples. See
+`eval/README.md` for scope and known example-reliability caveats.
+
 ## Architecture
 
 ### Layer Overview
