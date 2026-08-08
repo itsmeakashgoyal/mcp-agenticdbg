@@ -22,6 +22,10 @@ Connect it to Cursor, VS Code, or any MCP-compatible client and ask:
 
 The assistant drives CDB/GDB/LLDB, extracts crash context, maps it to source, and optionally generates patch/PR artifacts.
 
+![TriagePilot grounding a use-after-free root cause in a real debugger session](docs/demos/use-after-free.gif)
+
+*A real crash — [`examples/common/use-after-free.cpp`](examples/common/use-after-free.cpp) — triaged through TriagePilot's actual `analyze_dump` path. More crash types below; see [`docs/demos/`](docs/demos/) to regenerate or add your own.*
+
 Inspired by [`mcp-windbg`](https://github.com/svnscha/mcp-windbg).
 
 ## Platform Support
@@ -159,6 +163,20 @@ All options are also configurable via environment variables with the `TRIAGEPILO
 ## Example Crash Programs
 
 The `examples/` folder contains seventeen C++ programs that intentionally crash, covering stack overflow, use-after-free, double-free, vtable corruption, heap corruption, format-string bugs, STL iterator invalidation, exception-safety violations, cyclic data structures, unsynchronized concurrent containers, lock-order-inversion deadlocks, dangling stack references across detached threads, and more.
+
+A few, triaged for real — see [`docs/demos/`](docs/demos/) to regenerate or add your own:
+
+<table>
+<tr><th>double-free.cpp</th><th>thread-uaf.cpp</th></tr>
+<tr>
+<td><img src="docs/demos/double-free.gif" alt="TriagePilot separating a double-free's crash location from its root cause" width="420"></td>
+<td><img src="docs/demos/thread-uaf.gif" alt="TriagePilot explaining a cross-thread use-after-free using both threads' stacks" width="420"></td>
+</tr>
+<tr>
+<td>Crash location (line 59) vs. root cause (line 46) — the abort backtrace alone doesn't tell you which.</td>
+<td>Cross-thread use-after-free — the crashing thread's stack only makes sense next to the thread that freed the memory.</td>
+</tr>
+</table>
 
 ```bash
 # Build
