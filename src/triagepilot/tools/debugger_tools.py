@@ -48,16 +48,37 @@ BLOCKED_COMMAND_PREFIXES_CDB = (
 BLOCKED_COMMAND_PREFIXES_GDB = (
     "shell",
     "!",
+    "python",
+    "python-interactive",
+    "pi",
+    "guile",
+    "guile-repl",
+    "call",
+    "define",
+    "source",
 )
 BLOCKED_COMMAND_PREFIXES_LLDB = (
     "platform shell",
     "process launch",
+    "script",
 )
 
 
 def validate_debugger_command(command: str, debugger_type: str = "auto") -> None:
     """Reject debugger commands on the security blocklist."""
-    normalized = command.strip().lower()
+    # Every backend appends its own trailing "echo <marker>" command after a
+    # "\n" to detect completion (see send_command() in each backends/*.py).
+    # An embedded newline/CR in `command` would let arbitrary extra commands
+    # ride along after it, bypassing the blocklist below entirely.
+    if "\n" in command or "\r" in command:
+        logger.warning("Blocked debugger command attempt with embedded line break: %r", command)
+        raise McpError(
+            ErrorData(
+                code=INVALID_PARAMS,
+                message="Command must not contain newlines or carriage returns.",
+            )
+        )
+
     if debugger_type == "auto":
         debugger_type = detect_debugger_type()
 
@@ -71,18 +92,24 @@ def validate_debugger_command(command: str, debugger_type: str = "auto") -> None
     else:
         blocklist = BLOCKED_COMMAND_PREFIXES_CDB
 
-    for prefix in blocklist:
-        if normalized.startswith(prefix):
-            logger.warning("Blocked debugger command attempt: %s", command)
-            raise McpError(
-                ErrorData(
-                    code=INVALID_PARAMS,
-                    message=(
-                        f"Command '{prefix}' is blocked for security reasons. "
-                        "Contact an administrator if you need this capability."
-                    ),
+    # CDB treats ';' as a same-line command separator, which would otherwise
+    # let a blocked command hide behind an allowed one, e.g. "r;.shell calc".
+    segments = command.split(";") if debugger_type == "cdb" else [command]
+
+    for segment in segments:
+        normalized = segment.strip().lower()
+        for prefix in blocklist:
+            if normalized.startswith(prefix):
+                logger.warning("Blocked debugger command attempt: %s", command)
+                raise McpError(
+                    ErrorData(
+                        code=INVALID_PARAMS,
+                        message=(
+                            f"Command '{prefix}' is blocked for security reasons. "
+                            "Contact an administrator if you need this capability."
+                        ),
+                    )
                 )
-            )
 
 
 # Keep backward compat alias
