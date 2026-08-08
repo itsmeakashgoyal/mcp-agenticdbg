@@ -1,0 +1,88 @@
+<svg viewBox="0 0 1000 610" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#9a9a9a"/>
+  </marker>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.12"/>
+  </filter>
+</defs>
+<rect x="0" y="0" width="1000" height="610" fill="#ffffff" rx="10"/>
+<text x="30" y="28" font-size="17" font-weight="700" fill="#1a1a1a">TriagePilot Architecture</text>
+<text x="30" y="46" font-size="12" fill="#6a6a6a">How an AI assistant goes from a crash dump to a grounded root-cause explanation</text>
+<rect x="300" y="65" width="400" height="50" rx="9" fill="#f5f3ff" stroke="#6E56CF" stroke-width="1.4" filter="url(#shadow)"/>
+<text x="500.0" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">AI Assistant / MCP Client</text>
+<text x="500.0" y="102" text-anchor="middle" font-size="10.5" fill="#6a6a6a">Cursor &#183; VS Code &#183; Claude Desktop &#183; any MCP client</text>
+<line x1="350" y1="115" x2="350" y2="155" stroke="#9a9a9a" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="364" y="132" font-size="10" fill="#6a6a6a">MCP Protocol</text>
+<text x="364" y="145" font-size="10" fill="#6a6a6a">stdio &#183; JSON-RPC</text>
+<rect x="90" y="165" width="520" height="270" rx="10" fill="#fafafa" stroke="#d8d8d8" stroke-width="1.4"/>
+<text x="106" y="187" font-size="13" font-weight="700" fill="#1a1a1a">TriagePilot MCP Server</text>
+<text x="106" y="201" font-size="10" font-style="italic" fill="#9a9a9a">src/triagepilot/</text>
+<rect x="105" y="215" width="490" height="40" rx="7" fill="#efe9ff" stroke="#6E56CF" stroke-width="1.2"/>
+<text x="350.0" y="232" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a1a1a">server.py</text>
+<text x="350.0" y="246" text-anchor="middle" font-size="10" fill="#5a5a5a">Tool &amp; prompt endpoints &#183; Pydantic parameter models</text>
+<rect x="105" y="267" width="237.5" height="88" rx="7" fill="#f4f4ff" stroke="#b8adf0" stroke-width="1.2"/>
+<text x="117" y="285" font-size="12.5" font-weight="700" fill="#1a1a1a">tools/</text>
+<text x="117" y="300" font-size="9.5" font-style="italic" fill="#8a8a8a">debugger_tools &#183; git_tools</text>
+<text x="117" y="315" font-size="10" fill="#4a4a4a">Session pooling, crash analysis,</text>
+<text x="117" y="329" font-size="10" fill="#4a4a4a">source localization, PR/patch</text>
+<rect x="357.5" y="267" width="237.5" height="88" rx="7" fill="#f6f6f6" stroke="#c9c9c9" stroke-width="1.2"/>
+<text x="369.5" y="285" font-size="12.5" font-weight="700" fill="#1a1a1a">backends/</text>
+<text x="369.5" y="300" font-size="9.5" font-style="italic" fill="#8a8a8a">base.py &#8212; DebuggerSession ABC</text>
+<text x="369.5" y="315" font-size="10" fill="#4a4a4a">Platform adapters:</text>
+<rect x="369.5" y="324" width="65.83333333333333" height="20" rx="5" fill="#e8f3fc" stroke="#0078D6" stroke-width="1.1"/>
+<text x="402.4166666666667" y="337.5" text-anchor="middle" font-size="8.3" font-weight="600" fill="#0078D6">cdb.py</text>
+<rect x="443.3333333333333" y="324" width="65.83333333333333" height="20" rx="5" fill="#fdf6e0" stroke="#a6821a" stroke-width="1.1"/>
+<text x="476.25" y="337.5" text-anchor="middle" font-size="8.3" font-weight="600" fill="#a6821a">gdb.py</text>
+<rect x="517.1666666666666" y="324" width="65.83333333333333" height="20" rx="5" fill="#f0f0f0" stroke="#1a1a1a" stroke-width="1.1"/>
+<text x="550.0833333333333" y="337.5" text-anchor="middle" font-size="8.3" font-weight="600" fill="#1a1a1a">lldb.py</text>
+<rect x="105" y="367" width="237.5" height="88" rx="7" fill="#eefaf3" stroke="#8fd6ab" stroke-width="1.2"/>
+<text x="117" y="385" font-size="12.5" font-weight="700" fill="#1a1a1a">memory/</text>
+<text x="117" y="400" font-size="9.5" font-style="italic" fill="#8a8a8a">store &#183; similarity &#183; signature</text>
+<text x="117" y="415" font-size="10" fill="#4a4a4a">SQLite crash knowledge base:</text>
+<text x="117" y="429" font-size="10" fill="#4a4a4a">auto-save/recall, TF-IDF match</text>
+<rect x="357.5" y="367" width="237.5" height="88" rx="7" fill="#f6f6f6" stroke="#c9c9c9" stroke-width="1.2"/>
+<text x="369.5" y="385" font-size="12.5" font-weight="700" fill="#1a1a1a">config.py</text>
+<text x="369.5" y="400" font-size="9.5" font-style="italic" fill="#8a8a8a">env vars (TRIAGEPILOT_*) &#183; CLI flags</text>
+<text x="369.5" y="415" font-size="10" fill="#4a4a4a">graph/ (optional): LangGraph</text>
+<text x="369.5" y="429" font-size="10" fill="#4a4a4a">autonomous triage &#8212; auto_triage_dump</text>
+<line x1="350.0" y1="435" x2="170.0" y2="465" stroke="#9a9a9a" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="350.0" y1="435" x2="350.0" y2="465" stroke="#9a9a9a" stroke-width="1.4" marker-end="url(#arrow)"/>
+<line x1="350.0" y1="435" x2="530.0" y2="465" stroke="#9a9a9a" stroke-width="1.4" marker-end="url(#arrow)"/>
+<rect x="90.0" y="465" width="160" height="70" rx="8" fill="#e8f3fc" stroke="#0078D6" stroke-width="1.3" filter="url(#shadow)"/>
+<text x="170.0" y="487" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0078D6">CDB / WinDbg</text>
+<text x="170.0" y="503" text-anchor="middle" font-size="10" fill="#5a5a5a">Windows</text>
+<text x="170.0" y="518" text-anchor="middle" font-size="9" fill="#7a7a7a">reads .dmp minidumps</text>
+<rect x="270.0" y="465" width="160" height="70" rx="8" fill="#fdf6e0" stroke="#a6821a" stroke-width="1.3" filter="url(#shadow)"/>
+<text x="350.0" y="487" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a6821a">GDB</text>
+<text x="350.0" y="503" text-anchor="middle" font-size="10" fill="#5a5a5a">Linux (MI + CLI)</text>
+<text x="350.0" y="518" text-anchor="middle" font-size="9" fill="#7a7a7a">reads core / core.* files</text>
+<rect x="450.0" y="465" width="160" height="70" rx="8" fill="#f0f0f0" stroke="#1a1a1a" stroke-width="1.3" filter="url(#shadow)"/>
+<text x="530.0" y="487" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1a1a1a">LLDB</text>
+<text x="530.0" y="503" text-anchor="middle" font-size="10" fill="#5a5a5a">macOS</text>
+<text x="530.0" y="518" text-anchor="middle" font-size="9" fill="#7a7a7a">reads core dumps (lldb)</text>
+<text x="675" y="211" font-size="11.5" font-weight="700" fill="#6a6a6a">Integrations</text>
+<line x1="610" y1="297.5" x2="665" y2="297.5" stroke="#9a9a9a" stroke-width="1.4" marker-end="url(#arrow)"/>
+<text x="597.5" y="291.5" font-size="9" fill="#9a9a9a">tools/ &#183; memory/</text>
+<line x1="665" y1="257.5" x2="665" y2="417.5" stroke="#c9c9c9" stroke-width="1.4"/>
+<line x1="665" y1="257.5" x2="675" y2="257.5" stroke="#c9c9c9" stroke-width="1.4"/>
+<rect x="675" y="225" width="295" height="65" rx="8" fill="#ffffff" stroke="#e2e2e2" stroke-width="1.2" filter="url(#shadow)"/>
+<rect x="675" y="225" width="4" height="65" fill="#6E56CF"/>
+<text x="691" y="244" font-size="12" font-weight="700" fill="#1a1a1a">Local Repository</text>
+<text x="691" y="259" font-size="9.5" fill="#5a5a5a">Maps the faulting frame back</text>
+<text x="691" y="272" font-size="9.5" fill="#5a5a5a">to your repo's .cpp source</text>
+<line x1="665" y1="337.5" x2="675" y2="337.5" stroke="#c9c9c9" stroke-width="1.4"/>
+<rect x="675" y="305" width="295" height="65" rx="8" fill="#ffffff" stroke="#e2e2e2" stroke-width="1.2" filter="url(#shadow)"/>
+<rect x="675" y="305" width="4" height="65" fill="#6E56CF"/>
+<text x="691" y="324" font-size="12" font-weight="700" fill="#1a1a1a">Memory DB (SQLite)</text>
+<text x="691" y="339" font-size="9.5" fill="#5a5a5a">~/.triagepilot/memory.db</text>
+<text x="691" y="352" font-size="9.5" fill="#5a5a5a">signatures, confidence decay</text>
+<line x1="665" y1="417.5" x2="675" y2="417.5" stroke="#c9c9c9" stroke-width="1.4"/>
+<rect x="675" y="385" width="295" height="65" rx="8" fill="#ffffff" stroke="#e2e2e2" stroke-width="1.2" filter="url(#shadow)"/>
+<rect x="675" y="385" width="4" height="65" fill="#6E56CF"/>
+<text x="691" y="404" font-size="12" font-weight="700" fill="#1a1a1a">GitHub</text>
+<text x="691" y="419" font-size="9.5" fill="#5a5a5a">create_repo_pr / create_shared_patch</text>
+<text x="691" y="432" font-size="9.5" fill="#5a5a5a">commit &#8594; branch &#8594; push &#8594; PR</text>
+<text x="30" y="596" font-size="10" fill="#9a9a9a">Backends share one abstract session interface (backends/base.py) &#8212; adding a platform means implementing one adapter.</text>
+</svg>

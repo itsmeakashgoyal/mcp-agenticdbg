@@ -52,20 +52,7 @@ triagepilot --help
 
 ## How It Works
 
-```text
-You (Cursor / VS Code)
-  |
-  | "Why did this crash happen?"
-  v
-AI Assistant
-  |
-  v
-TriagePilot MCP Server
-  |
-  +--> CDB (Windows) --> .dmp
-  +--> GDB (Linux)   --> core dumps
-  +--> LLDB (macOS)  --> core dumps
-```
+![TriagePilot architecture](docs/architecture.svg)
 
 1. The AI calls TriagePilot's MCP tools (`analyze_dump`, `run_debugger_cmd`, etc.)
 2. TriagePilot auto-detects your platform and launches the right debugger
