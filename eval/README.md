@@ -142,7 +142,7 @@ all). Not a TriagePilot bug or a harness bug -- the same category of
 example-program determinism the aarch64 findings above already document,
 just on a different allocator.
 
-### Windows: was 0/16, root cause found and fixed
+### Windows: was 0/16, now 8/16 after two fixes
 
 Every non-reproduction's captured output pointed to the same bug once
 diagnosed: `crashdump.h`'s Windows `CrashDumpHandler()` computed the
@@ -155,38 +155,49 @@ skips leading-dot filenames as hidden (a convention baked into Python's
 `glob` module on every platform, not just POSIX), so it never saw them --
 while `run-all.ps1`'s `Get-ChildItem -Filter "*.dmp"` has no such
 convention and found them fine, which is why `windows-cdb-smoke-test`
-never caught this. Fixed in `crashdump.h`; expect most access-violation
-examples to reproduce once this lands in CI.
+never caught this. Fixed in `crashdump.h`.
 
-That fix does not cover every example, though -- the captured output also
-surfaced two categories of crash that never reach
-`SetUnhandledExceptionFilter` at all, confirmed by their exit codes:
+That single fix took Windows from 0/16 to 8/16 -- including
+`stack-overflow`, which an earlier version of this doc guessed had a
+*separate* problem (the handler itself faulting from stack exhaustion,
+based on one retry attempt's captured output showing no "Dump written"
+line). That guess was wrong: it was the same empty-basename bug all
+along, just caught mid-retry on an attempt whose diagnostic happened to
+get captured before the print. Worth noting since it's a reminder to
+trust the next real result over a plausible-sounding theory.
 
-- `double-free`, `heap-corruption`, and `concurrent-vector-race` exit with
-  `0xC0000374` (`STATUS_HEAP_CORRUPTION`), and `exception-in-destructor-terminate`
-  / `lock-order-inversion-deadlock` (both `abort()`-based) exit with
-  `0xC0000409`. Both are Windows `__fastfail` codes -- by design, `__fastfail`
-  bypasses the normal SEH dispatch (including `SetUnhandledExceptionFilter`)
+The remaining 8 fall into three categories, confirmed by exit code:
+
+- `double-free`, `heap-corruption`, `concurrent-vector-race` (exit
+  `0xC0000374`, `STATUS_HEAP_CORRUPTION`) and `exception-in-destructor-terminate`
+  / `lock-order-inversion-deadlock` (both `abort()`-based, exit `0xC0000409`)
+  never reach `SetUnhandledExceptionFilter` at all. Both are Windows
+  `__fastfail` codes -- by design, `__fastfail` bypasses normal SEH dispatch
   unless a debugger is already attached, specifically so a corrupted-heap
-  process can't have its termination hijacked. A registered handler in the
-  target process itself structurally cannot catch these; the ones on macOS
-  and Linux reach a handler because they're a plain `raise(SIGABRT)`, not an
-  OS-level fail-fast.
-- `stack-overflow`, `stack-buffer-overrun`, and `cyclic-refcount-stack-overflow`
-  exit `0xC0000005` with no "Dump written" line at all -- consistent with
-  the handler itself faulting from stack exhaustion before it can finish
-  (writing a dump needs real stack space, and a stack-overflow-triggered
-  handler doesn't have much left). Fixable with a dedicated alternate stack
-  for the handler, not attempted yet.
-
-Closing both gaps for real would mean running each example under `cdb.exe`
-itself (already installed in the `windows-eval` CI job for the later
-analysis step, just unused during crash capture) rather than relying on
-the target's own in-process handler -- the same shift already made for
-macOS (`lldb --batch ... --one-line-on-crash`), since a debugger *is*
-notified of `__fastfail` exceptions even when a standalone process isn't.
-Not implemented yet; flagging it as the clear next step rather than
-guessing at a fix with no Windows box to verify it against.
+  process can't have its termination hijacked by its own (possibly also
+  corrupted) handler. A handler registered in the target process itself
+  structurally cannot catch these; the same crashes reach a handler on
+  macOS/Linux because they're a plain `raise(SIGABRT)`, not an OS-level
+  fail-fast. Closing this gap means running each example under `cdb.exe`
+  itself (already installed in the `windows-eval` CI job for the later
+  analysis step, just unused during crash capture) rather than relying on
+  the target's own in-process handler -- the same shift already made for
+  macOS (`lldb --batch ... --one-line-on-crash`), since a debugger *is*
+  notified of `__fastfail` exceptions even when a standalone process isn't.
+  Not implemented yet.
+- `heap-metadata-corruption` and `iterator-invalidation` -- same
+  allocator-determinism category as the macOS findings above (confirmed
+  from captured output: both exit status 0, no crash).
+- `cyclic-refcount-stack-overflow` reproduced the crash and wrote a dump
+  fine, but then failed with `CDBError: CDB initialization timed out` --
+  a *different* kind of failure from the others (it counts as "no" in the
+  table with no diagnostic block, since `run_until_crash` succeeded and
+  the failure happened afterwards, in `create_session()`). Its
+  `MiniDumpWithFullMemory` dump plus CDB's symbol loading for a
+  deeply-templated shared_ptr/STL recursion apparently needs more than
+  the eval's 30s session timeout on a loaded CI runner, even though
+  gdb/lldb open the equivalent dump for the same example in well under
+  that. Bumped the eval's session timeout to 90s.
 
 ## CI
 

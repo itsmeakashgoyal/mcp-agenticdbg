@@ -373,7 +373,16 @@ def evaluate_example(
             dump_path=core_path,
             image_path=binary,
             debugger_type=debugger_type,
-            timeout=30,
+            # cyclic-refcount-stack-overflow's CDB session hit "CDB
+            # initialization timed out" at 30s on Windows in CI -- its
+            # MiniDumpWithFullMemory dump plus CDB's symbol loading for a
+            # deeply-templated shared_ptr/STL recursion apparently needs
+            # more than that on a loaded runner, even though gdb/lldb
+            # handle the equivalent core/dump for the same example in well
+            # under 30s. A generous ceiling only costs time on the (rare)
+            # examples that actually need it; it can't make a
+            # faster-opening dump slower.
+            timeout=90,
         )
         try:
             crash_info = session.get_crash_info()
