@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>TriagePilot banner</title>
+<meta name="hz:slide-selector" content=".banner" />
+<meta name="hz:canvas-width" content="1280" />
+<meta name="hz:canvas-height" content="640" />
+<link rel="stylesheet" href="https://use.typekit.net/jbc5otd.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { display: flex; justify-content: center; align-items: center; background: #0d0d14; }
+
+  .banner {
+    position: relative;
+    width: 1280px;
+    height: 640px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #14141f 0%, #1b1b2b 55%, #191927 100%);
+  }
+
+  /* subtle decorative grid, kept faint */
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse 900px 640px at 30% 50%, black 40%, transparent 78%);
+  }
+
+  .glow {
+    position: absolute;
+    width: 640px;
+    height: 640px;
+    right: -160px;
+    top: -140px;
+    background: radial-gradient(circle, rgba(110,86,207,0.28) 0%, rgba(110,86,207,0) 70%);
+  }
+
+  .content {
+    position: absolute;
+    left: 76px;
+    top: 0;
+    bottom: 0;
+    width: 620px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .eyebrow {
+    font-family: "ubuntu-mono", monospace;
+    font-size: 15px;
+    letter-spacing: 3px;
+    color: #a897f5;
+    margin-bottom: 18px;
+  }
+
+  .title {
+    font-family: "neighbor", sans-serif;
+    font-weight: 700;
+    font-size: 84px;
+    line-height: 1;
+    color: #f4f3f9;
+    margin-bottom: 22px;
+  }
+
+  .subtitle {
+    font-family: "source-sans-3", sans-serif;
+    font-size: 23px;
+    line-height: 1.45;
+    color: #b7b4c9;
+    max-width: 520px;
+    margin-bottom: 34px;
+  }
+
+  .pills {
+    display: flex;
+    gap: 12px;
+  }
+
+  .pill {
+    font-family: "ubuntu-mono", monospace;
+    font-size: 15px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.14);
+    color: #e3e1ee;
+    background: rgba(255,255,255,0.04);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-cdb { background: #4fa3ff; }
+  .dot-gdb { background: #f2c14e; }
+  .dot-lldb { background: #9aa0a6; }
+
+  .term {
+    position: absolute;
+    right: 70px;
+    top: 130px;
+    width: 470px;
+    border-radius: 12px;
+    background: #131320;
+    border: 1px solid rgba(255,255,255,0.09);
+    box-shadow: 0 30px 70px rgba(0,0,0,0.45);
+    overflow: hidden;
+  }
+
+  .term-bar {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    background: #191927;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .term-dot { width: 11px; height: 11px; border-radius: 50%; }
+
+  .term-body {
+    font-family: "ubuntu-mono", monospace;
+    font-size: 16px;
+    line-height: 1.85;
+    padding: 22px 20px 26px;
+    color: #d6d3e0;
+  }
+  .term-body .muted { color: #726f85; }
+  .term-body .fn { color: #8ec8ff; }
+  .term-body .str { color: #f2c14e; }
+  .term-body .sig { color: #ff7b7b; font-weight: 700; }
+  .term-body .ok { color: #6ee7a8; }
+  .term-body .arrow { color: #a897f5; }
+</style>
+</head>
+<body>
+  <div class="banner" data-canvas-width="1280" data-canvas-height="640">
+    <div class="grid"></div>
+    <div class="glow"></div>
+
+    <div class="content">
+      <div class="eyebrow">MODEL CONTEXT PROTOCOL SERVER</div>
+      <div class="title">TriagePilot</div>
+      <div class="subtitle">Grounding AI debugging in runtime truth &mdash; real CDB, GDB, and LLDB sessions, not guesswork from logs.</div>
+      <div class="pills">
+        <div class="pill"><span class="dot dot-cdb"></span>CDB / WinDbg</div>
+        <div class="pill"><span class="dot dot-gdb"></span>GDB</div>
+        <div class="pill"><span class="dot dot-lldb"></span>LLDB</div>
+      </div>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <div class="term-dot" style="background:#ff5f57"></div>
+        <div class="term-dot" style="background:#febc2e"></div>
+        <div class="term-dot" style="background:#28c840"></div>
+      </div>
+      <div class="term-body"><span class="arrow">&gt;</span> <span class="fn">analyze_dump</span>(<span class="str">"core.use-after-free"</span>)<br/>
+<br/>
+<span class="muted">### Crash Information</span><br/>
+Signal: <span class="sig">SIGSEGV</span><br/>
+Frame: main <span class="muted">at use-after-free.cpp:89</span><br/>
+<br/>
+<span class="muted">### Faulting Source Code</span><br/>
+<span class="ok">&gt;&gt;&gt;</span> dangling-&gt;recv_buffer[0] = 999;<br/>
+<span class="muted">&nbsp;&nbsp;&nbsp;&nbsp;freed on line 73</span></div>
+    </div>
+  </div>
+</body>
+</html>

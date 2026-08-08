@@ -1,5 +1,7 @@
 # mcp-agenticdbg (TriagePilot)
 
+![TriagePilot](docs/banner.png)
+
 [![CI](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml/badge.svg)](https://github.com/itsmeakashgoyal/mcp-agenticdbg/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
