@@ -520,13 +520,20 @@ class GDBSession(DebuggerSession):
     # ------------------------------------------------------------------
 
     def _analysis_command(self) -> str:
-        return "bt full"
+        # Capped at 50 frames: an unbounded `bt full` on a genuine runaway
+        # recursion / cyclic-destructor stack overflow can walk tens of
+        # thousands of near-identical frames, each with locals to evaluate
+        # and pretty-print -- comfortably slower than any reasonable command
+        # timeout, which silently drops the whole section. 50 frames is far
+        # more than enough to reveal a repeating pattern (see
+        # cyclic-refcount-stack-overflow.cpp for the motivating example).
+        return "bt full 50"
 
     def _crash_info_command(self) -> str:
         return "info signal"
 
     def _stack_trace_command(self) -> str:
-        return "bt"
+        return "bt 50"
 
     def _modules_command(self) -> str:
         return "info sharedlibrary"
@@ -634,9 +641,13 @@ class GDBSession(DebuggerSession):
 
         _try("Signal / Termination", "info signal", 15)
         _try("Crash Frame", "frame", 10)
-        _try("Backtrace (full)", "bt full", self.timeout)
+        # Capped at 50 frames each -- see _analysis_command() for why an
+        # unbounded `bt full` is unsafe on a genuine deep-recursion crash.
+        # `thread apply all <cmd>` just runs <cmd> per thread, so the same
+        # cap composes cleanly for the all-threads case.
+        _try("Backtrace (full)", "bt full 50", self.timeout)
         _try("Registers", "info registers", 15)
-        _try("All Threads", "thread apply all bt full", self.timeout)
+        _try("All Threads", "thread apply all bt full 50", self.timeout)
         _try("Shared Libraries", "info sharedlibrary", self.timeout)
 
         return "\n".join(sections)
@@ -722,7 +733,11 @@ class GDBSession(DebuggerSession):
         (list of frame dicts) or ``raw`` (string) for CLI mode.
         """
         if not self.use_mi:
-            raw = self.send_command("thread apply all bt", timeout=self.timeout)
+            # NOTE: max_frames was previously accepted but silently ignored
+            # here (only the MI path below honored it) -- an unbounded
+            # `thread apply all bt` has the same runaway-recursion timeout
+            # risk described in _analysis_command().
+            raw = self.send_command(f"thread apply all bt {max_frames}", timeout=self.timeout)
             return [{"raw": "\n".join(raw)}]
 
         results: list[dict[str, Any]] = []

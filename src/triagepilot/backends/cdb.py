@@ -157,7 +157,10 @@ class CDBSession(DebuggerSession):
         return ".lastevent"
 
     def _stack_trace_command(self) -> str:
-        return "kb"
+        # `kb FrameCount` caps the walk -- see run_crash_analysis() for why
+        # (motivated by cyclic-refcount-stack-overflow.cpp on the GDB side;
+        # the same runaway-recursion risk applies to CDB's stack walker).
+        return "kb 50"
 
     def _modules_command(self) -> str:
         return "lm"
@@ -224,7 +227,11 @@ class CDBSession(DebuggerSession):
 
         _try("Last Event", ".lastevent", 10)
         _try("Crash Analysis", "!analyze -v")  # slow, activity-based
-        _try("Backtrace (current thread)", "kb", 15)
+        # `kb FrameCount` caps the walk (see _stack_trace_command()); the
+        # `~*kb` all-threads variant below is deliberately left unbounded --
+        # composing a frame-count limit with `~*` isn't confirmed and this
+        # backend has no CI coverage to safely verify it.
+        _try("Backtrace (current thread)", "kb 50", 15)
         _try("All Thread Backtraces", "~*kb")  # slow
         _try("Registers", "r", 15)
         _try("Loaded Modules", "lm")
@@ -262,7 +269,7 @@ class CDBSession(DebuggerSession):
             pass
 
         try:
-            summary["backtrace"] = self.send_command("kb", timeout=self.timeout)
+            summary["backtrace"] = self.send_command("kb 50", timeout=self.timeout)
         except CDBError:
             pass
 
@@ -291,6 +298,10 @@ class CDBSession(DebuggerSession):
         """Return per-thread backtraces as a list of structured dicts.
 
         Each dict has ``id``, ``raw`` (backtrace text for that thread).
+
+        NOTE: ``max_frames`` is currently unused -- see run_crash_analysis()
+        for why bounding CDB's "all threads" backtrace isn't done with
+        confidence yet.
         """
         try:
             raw = self.send_command("~*kb", timeout=self.timeout)

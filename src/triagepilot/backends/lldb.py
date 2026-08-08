@@ -125,13 +125,24 @@ class LLDBSession(DebuggerSession):
     # -- DebuggerSession abstract methods -----------------------------------
 
     def _analysis_command(self) -> str:
+        # NOTE: unlike the single-thread `bt` below, this "all threads"
+        # variant is deliberately left unbounded -- LLDB's frame-count flag
+        # (`-c`/positional count) is confirmed to work for the current
+        # thread, but combining it with `all` is not confirmed to compose
+        # the same way across LLDB versions, and this backend has no CI
+        # coverage to safely verify it. A genuine runaway-recursion crash
+        # can still time out this section; see gdb.py's equivalent comments
+        # for the underlying issue (motivated by
+        # cyclic-refcount-stack-overflow.cpp).
         return "bt all"
 
     def _crash_info_command(self) -> str:
         return "thread info"
 
     def _stack_trace_command(self) -> str:
-        return "bt"
+        # `-c 50` works across old (lldb-168 and earlier) and new (lldb-169+)
+        # versions, unlike the newer `bt 50` positional shorthand.
+        return "bt -c 50"
 
     def _modules_command(self) -> str:
         return "image list"
@@ -196,7 +207,10 @@ class LLDBSession(DebuggerSession):
 
         _try("Process Status", "process status", 10)
         _try("Crash Frame", "frame info", 10)
-        _try("Backtrace (full)", "bt", self.timeout)
+        # See _stack_trace_command()/_analysis_command() for why the
+        # single-thread backtrace is capped but "all threads" currently
+        # isn't.
+        _try("Backtrace (full)", "bt -c 50", self.timeout)
         _try("All Threads", "bt all", self.timeout)
         _try("Registers", "register read", 15)
         _try("Loaded Images", "image list", self.timeout)
@@ -233,7 +247,7 @@ class LLDBSession(DebuggerSession):
             pass
 
         try:
-            summary["backtrace"] = self.send_command("bt", timeout=self.timeout)
+            summary["backtrace"] = self.send_command("bt -c 50", timeout=self.timeout)
         except LLDBError:
             pass
 
@@ -261,6 +275,10 @@ class LLDBSession(DebuggerSession):
         """Return per-thread backtraces as a list of structured dicts.
 
         Each dict has ``id``, ``raw`` (backtrace text for that thread).
+
+        NOTE: ``max_frames`` is currently unused -- see
+        ``_analysis_command()`` for why bounding LLDB's "all threads"
+        backtrace isn't done with confidence yet.
         """
         try:
             raw = self.send_command("bt all", timeout=self.timeout)
