@@ -116,6 +116,37 @@ def validate_debugger_command(command: str, debugger_type: str = "auto") -> None
 validate_cdb_command = validate_debugger_command
 
 
+def _resolve_scoped_path(candidate: str | None, base: str | None, param_name: str) -> str | None:
+    """Resolve a per-call path override, confined to the configured *base* root.
+
+    ``repo_path``/``symbols_path`` accept a per-call override (see
+    ``AnalyzeDumpParams`` etc. in server.py), and source localization echoes
+    matched file contents back into the MCP response. Without confinement, a
+    caller (or a crash-triage prompt steered by attacker-controlled dump
+    content) could point ``repo_path`` outside the intended project and read
+    back arbitrary files the server process has access to. When the operator
+    has configured a default root (``base``), any override must resolve
+    inside it. With no configured default there is no boundary to enforce,
+    so *candidate* passes through unchanged (matches prior behavior).
+    """
+    if not candidate or not base:
+        return candidate or base
+
+    real_base = os.path.realpath(base)
+    real_candidate = os.path.realpath(candidate)
+    if real_candidate != real_base and not real_candidate.startswith(real_base + os.sep):
+        raise McpError(
+            ErrorData(
+                code=INVALID_PARAMS,
+                message=(
+                    f"{param_name} '{candidate}' is outside the configured root "
+                    f"'{base}'. Use a path within the configured root."
+                ),
+            )
+        )
+    return candidate
+
+
 class _TokenBucket:
     """Simple thread-safe token-bucket rate limiter."""
 
@@ -374,7 +405,10 @@ def _find_file_in_repo(
 ) -> list[str]:
     """Walk the repo to find files matching the given basename (ignores .gitignore).
 
-    ``followlinks=False`` prevents symlinks from escaping the repo root.
+    ``followlinks=False`` keeps the walk from descending into symlinked
+    *directories*, but ``os.walk`` still lists symlinked *files* -- skip
+    those explicitly so a symlink planted in the repo can't be used to read
+    a file outside ``repo_path``.
     """
     matches: list[str] = []
     target = filename.lower()
@@ -389,8 +423,9 @@ def _find_file_in_repo(
                     "Source lookup budget exhausted while scanning files for %s", filename
                 )
                 return matches
-            if f.lower() == target:
-                matches.append(os.path.join(dirpath, f))
+            full_path = os.path.join(dirpath, f)
+            if f.lower() == target and not os.path.islink(full_path):
+                matches.append(full_path)
     return matches
 
 
@@ -426,6 +461,8 @@ def _find_function_in_repo(
             if not any(fname.lower().endswith(ext) for ext in _SOURCE_EXTENSIONS):
                 continue
             filepath = os.path.join(dirpath, fname)
+            if os.path.islink(filepath):
+                continue
             try:
                 with open(filepath, encoding="utf-8", errors="replace") as fh:
                     for line_num, line in enumerate(fh, 1):
@@ -774,7 +811,7 @@ async def _run_dump_analysis(
     verbose: bool,
 ) -> list[TextContent]:
     """Run the standard dump analysis pipeline and return markdown output."""
-    effective_symbols_path = args.symbols_path or symbols_path
+    effective_symbols_path = _resolve_scoped_path(args.symbols_path, symbols_path, "symbols_path")
     effective_image_path = args.image_path or image_path
     force_replace = args.symbols_path is not None or args.image_path is not None
 
@@ -798,7 +835,7 @@ async def _run_dump_analysis(
     analysis = await asyncio.to_thread(session.run_crash_analysis)
     results.append("### Crash Analysis\n```\n" + analysis + "\n```\n\n")
 
-    effective_repo_path = args.repo_path or repo_path
+    effective_repo_path = _resolve_scoped_path(args.repo_path, repo_path, "repo_path")
     if effective_repo_path:
         source_section = await asyncio.to_thread(
             locate_faulting_source, analysis, effective_repo_path
@@ -980,7 +1017,7 @@ async def handle_run_cmd(
 
     logger.info("run_debugger_cmd: command=%s dump=%s", args.command, args.dump_path)
 
-    effective_symbols_path = args.symbols_path or symbols_path
+    effective_symbols_path = _resolve_scoped_path(args.symbols_path, symbols_path, "symbols_path")
     effective_image_path = args.image_path or image_path
     force_replace = args.symbols_path is not None or args.image_path is not None
 
