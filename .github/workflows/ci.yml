@@ -195,6 +195,70 @@ jobs:
           name: eval-results
           path: eval/results.md
 
+  macos-eval:
+    name: Crash-Triage Eval (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --dev
+      - name: Run eval harness
+        # Runs each example under lldb (process save-core) instead of a
+        # plain core dump, since ReportCrash intercepts the signal first --
+        # see eval/README.md's "macOS and Windows crash capture" section.
+        run: uv run python eval/run_eval.py
+      - name: Publish results to job summary
+        if: always()
+        run: cat eval/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results-macos
+          path: eval/results.md
+
+  windows-eval:
+    name: Crash-Triage Eval (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Install WinDbg from Microsoft Store
+        run: winget install 9PGJGD53TN86 --accept-source-agreements --accept-package-agreements
+      - run: uv sync --dev
+      - name: Run eval harness
+        # Builds each example with cl.exe (see run_eval.py's
+        # _build_binary_windows) and detects crashes via the .dmp file
+        # crashdump.h's SetUnhandledExceptionFilter writes, not a POSIX
+        # core file -- see eval/README.md's "macOS and Windows crash
+        # capture" section, including the known abort()-based-example
+        # caveat that hasn't been verified against a real Windows run yet.
+        run: uv run python eval/run_eval.py
+      - name: Publish results to job summary
+        if: always()
+        run: |
+          Get-Content eval/results.md -ErrorAction SilentlyContinue |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results-windows
+          path: eval/results.md
+
   linux-gdb-smoke-test:
     name: Linux GDB Smoke Test
     runs-on: ubuntu-latest

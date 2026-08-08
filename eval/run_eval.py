@@ -17,10 +17,13 @@ Usage:
     uv run python eval/run_eval.py
     uv run python eval/run_eval.py --keep-cores --output eval/results.md
 
-Requires a real debugger on PATH (gdb on Linux, lldb on macOS) and a
-compiler (g++/clang++). See eval/README.md for platform notes (core dump
+Requires a real debugger on PATH (gdb on Linux, lldb on macOS, cdb on
+Windows) and a compiler (g++/clang++, or cl.exe from a Developer Command
+Prompt on Windows). See eval/README.md for platform notes (core dump
 generation on Linux may require adjusting /proc/sys/kernel/core_pattern;
-see docs/TROUBLESHOOTING.md).
+see docs/TROUBLESHOOTING.md; macOS/Windows crash capture works differently
+from the POSIX-core path -- see eval/README.md's "macOS and Windows crash
+capture" section).
 """
 
 from __future__ import annotations
@@ -90,6 +93,9 @@ def _compiler() -> str:
 
 def build_binary(entry: CrashGroundTruth, out_dir: str) -> str:
     """Compile one example with debug info; returns the executable path."""
+    if sys.platform == "win32":
+        return _build_binary_windows(entry, out_dir)
+
     cxx = _compiler()
     src = os.path.join(COMMON_DIR, entry.source_file)
     out = os.path.join(out_dir, entry.name)
@@ -100,10 +106,75 @@ def build_binary(entry: CrashGroundTruth, out_dir: str) -> str:
     return out
 
 
+def _build_binary_windows(entry: CrashGroundTruth, out_dir: str) -> str:
+    """Compile with cl.exe, matching examples/windows/build.ps1's flags.
+
+    Deliberately does not fall back to a MinGW g++/clang++ that might be on
+    PATH: this needs to exercise the same MSVC-compiled binary shape that
+    the windows-cdb-smoke-test CI job validates, since MinGW would sidestep
+    MSVC-specific issues that job already caught once (C++20 designated
+    initializers, which GCC/Clang tolerate as an extension but MSVC rejects
+    without /std:c++20 -- see heap-metadata-corruption.cpp's history).
+    entry.needs_pthread is a no-op here: the three portable-std::thread
+    examples that flag it need an explicit -lpthread on Linux/macOS, but
+    nothing extra under MSVC.
+    """
+    if not shutil.which("cl.exe"):
+        raise RuntimeError(
+            "cl.exe not found on PATH -- run from a Developer Command Prompt "
+            "(or a CI step after ilammy/msvc-dev-cmd)"
+        )
+    src = os.path.join(COMMON_DIR, entry.source_file)
+    out = os.path.join(out_dir, f"{entry.name}.exe")
+    pdb = os.path.join(out_dir, f"{entry.name}.pdb")
+    obj = os.path.join(out_dir, f"{entry.name}.obj")
+    cmd = [
+        "cl.exe",
+        "/nologo",
+        "/Zi",
+        "/Od",
+        "/MT",
+        "/EHsc",
+        "/GS-",
+        "/std:c++17",
+        f"/I{COMMON_DIR}",
+        f"/Fo:{obj}",
+        f"/Fe:{out}",
+        src,
+        "/link",
+        "/DEBUG",
+        "/INCREMENTAL:NO",
+        f"/PDB:{pdb}",
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return out
+
+
 def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> tuple[bool, str | None, str | None]:
+    """Dispatch to the platform-appropriate crash-and-capture strategy.
+
+    Each example self-installs a crash handler via crashdump.h, but *how*
+    that handler's output turns into a file this harness can hand to
+    create_session() differs per platform -- see each helper's docstring.
+
+    Returns (reproduced, signal_name, dump_path).
+    """
+    if sys.platform == "win32":
+        return _run_until_crash_windows(binary, run_dir, max_attempts)
+    if sys.platform == "darwin":
+        return _run_until_crash_macos(binary, run_dir, max_attempts)
+    return _run_until_crash_linux(binary, run_dir, max_attempts)
+
+
+def _run_until_crash_linux(
+    binary: str, run_dir: str, max_attempts: int
+) -> tuple[bool, str | None, str | None]:
     """Run ``binary`` up to ``max_attempts`` times until a core file appears.
 
-    Returns (reproduced, signal_name, core_path).
+    crashdump.h's POSIX branch re-raises the signal with default disposition
+    after printing "[crashdump] Caught signal ..." to stderr, so the OS
+    itself writes the core file (see eval/README.md for the
+    /proc/sys/kernel/core_pattern prerequisite).
     """
     for _attempt in range(max_attempts):
         before = set(glob.glob(os.path.join(run_dir, "core*")))
@@ -136,6 +207,110 @@ def run_until_crash(binary: str, run_dir: str, max_attempts: int) -> tuple[bool,
     return False, None, None
 
 
+def _run_until_crash_macos(
+    binary: str, run_dir: str, max_attempts: int
+) -> tuple[bool, str | None, str | None]:
+    """Run ``binary`` under lldb so it intercepts the crash before macOS's
+    ReportCrash agent does, saving a core via ``process save-core``.
+
+    Same technique as examples/macos/gen_core_mac.sh (see its comments for
+    why a plain `ulimit -c unlimited` + direct subprocess.run doesn't
+    reliably produce a core on modern macOS) -- ``--one-line-on-crash``
+    commands only run when lldb's stop reason is a crash, so a clean exit
+    (crash didn't reproduce this attempt) just falls through to the next
+    attempt with no core file written.
+    """
+    lldb = shutil.which("lldb")
+    if not lldb:
+        raise RuntimeError("lldb not found on PATH")
+
+    for attempt in range(max_attempts):
+        core_path = os.path.join(run_dir, f"core.{os.path.basename(binary)}.{attempt}")
+        proc = subprocess.run(
+            [
+                lldb,
+                binary,
+                "--batch",
+                "-o",
+                "run",
+                "--one-line-on-crash",
+                f"process save-core {core_path}",
+                "--one-line-on-crash",
+                "quit",
+            ],
+            cwd=run_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+
+        # Signal name comes from crashdump.h's own "[crashdump] Caught
+        # signal ..." print (which lldb passes through as the target's
+        # inherited stdout/stderr), not from lldb's own stop-reason text --
+        # keeps this consistent with how the Linux branch detects it.
+        signal_name = None
+        if "Caught signal" in (proc.stdout or ""):
+            m = SIGNAL_PATTERN.search(proc.stdout)
+            if m:
+                signal_name = m.group(1)
+
+        if os.path.isfile(core_path):
+            return True, signal_name, core_path
+
+    return False, None, None
+
+
+# Windows exit codes that indicate a genuine crash reached crashdump.h's
+# SetUnhandledExceptionFilter and produced a dump, mapped to the nearest
+# POSIX-equivalent signal name so unmodified ground_truth.py entries
+# (written in terms of SIGSEGV/SIGABRT) still score correctly. This list
+# reflects the well-documented NTSTATUS for access violation; it is *not*
+# exhaustive -- a bare abort() call (the double-free/heap-corruption
+# examples' usual mechanism on glibc) does not raise a structured exception
+# on Windows at all by default and so never reaches this handler, meaning
+# those examples may legitimately report "not reproduced" here until that
+# gap is closed. See eval/README.md for the caveat this maps to.
+_WINDOWS_EXIT_CODE_TO_SIGNAL = {
+    0xC0000005: "SIGSEGV",  # STATUS_ACCESS_VIOLATION
+}
+
+
+def _run_until_crash_windows(
+    binary: str, run_dir: str, max_attempts: int
+) -> tuple[bool, str | None, str | None]:
+    """Run ``binary`` up to ``max_attempts`` times until a .dmp file appears.
+
+    crashdump.h's Windows branch installs SetUnhandledExceptionFilter,
+    which writes a MiniDump to <exe-dir>\\dumps\\ rather than a POSIX core
+    file -- detect a crash by that file appearing instead of by exit-code
+    sign (Windows exit codes are unsigned NTSTATUS values, not negative
+    signal numbers).
+    """
+    exe_dir = os.path.dirname(os.path.abspath(binary))
+    dump_dir = os.path.join(exe_dir, "dumps")
+
+    for _attempt in range(max_attempts):
+        before = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
+        proc = subprocess.run(
+            [binary],
+            cwd=run_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+        after = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
+        new_dumps = sorted(after - before, key=os.path.getmtime)
+
+        if new_dumps:
+            exit_code = proc.returncode & 0xFFFFFFFF
+            signal_name = _WINDOWS_EXIT_CODE_TO_SIGNAL.get(exit_code, f"EXIT_0x{exit_code:08X}")
+            return True, signal_name, new_dumps[-1]
+
+    return False, None, None
+
+
 def evaluate_example(
     entry: CrashGroundTruth,
     build_dir: str,
@@ -158,7 +333,7 @@ def evaluate_example(
         result.signal_seen = signal_name
 
         if not reproduced:
-            result.error = "crash did not reproduce (no core file after retries)"
+            result.error = "crash did not reproduce (no core/dump file after retries)"
             return result
 
         session = create_session(
@@ -274,6 +449,18 @@ def main() -> int:
     _try_raise_core_ulimit()
 
     entries = GROUND_TRUTH
+    if sys.platform == "win32":
+        # thread-uaf.cpp uses raw POSIX pthreads with no MSVC equivalent --
+        # already excluded from examples/windows/build.ps1 for the same
+        # reason (see its comments).
+        excluded = {"thread-uaf"}
+        skipped = [e.name for e in entries if e.name in excluded]
+        entries = [e for e in entries if e.name not in excluded]
+        for name in skipped:
+            print(
+                f"[eval] skipping {name} on Windows (raw POSIX pthreads, no MSVC equivalent)",
+                file=sys.stderr,
+            )
     if args.only:
         entries = [e for e in entries if e.name in args.only]
 

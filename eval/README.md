@@ -35,8 +35,12 @@ reliability, not TriagePilot's analysis quality.
 
 ## Running it
 
-Requires a real debugger on `PATH` (`gdb` on Linux, `lldb` on macOS) and a
-C++ compiler (`g++`/`clang++`).
+Requires a real debugger on `PATH` (`gdb` on Linux, `lldb` on macOS, `cdb`
+on Windows) and a C++ compiler -- `g++`/`clang++` on Linux/macOS, or
+`cl.exe` on Windows (run from a Developer Command Prompt so it's on
+`PATH`; the harness always uses `cl.exe` there, matching
+`examples/windows/build.ps1`'s flags, rather than a MinGW `g++`/`clang++`
+that might also be on `PATH`).
 
 ```bash
 uv sync --extra langgraph   # or: pip install -e .
@@ -100,9 +104,40 @@ All seventeen examples now reproduce their documented signal reliably in
 direct testing; none of the original non-reproduction findings reflected a
 TriagePilot bug -- it was example-program determinism.
 
+## macOS and Windows crash capture
+
+Crash capture works differently per platform because crashdump.h's two
+implementations write different artifacts:
+
+- **macOS** -- a plain `subprocess.run()` + `ulimit -c unlimited` doesn't
+  reliably produce a core, because ReportCrash intercepts the signal
+  first (the same issue `examples/macos/gen_core_mac.sh` works around).
+  The harness runs each binary under
+  `lldb --batch -o run --one-line-on-crash "process save-core ..."`
+  instead, exactly like that script.
+- **Windows** -- crashdump.h's `SetUnhandledExceptionFilter` handler
+  writes a `.dmp` under `<exe-dir>\dumps\` rather than a POSIX core file,
+  so the harness watches that directory for a new file instead of
+  checking the process's exit-code sign. `thread-uaf` is skipped on
+  Windows for the same reason `build.ps1` excludes it (raw POSIX
+  pthreads, no MSVC equivalent).
+
+  This has **not been verified against a real Windows/CDB run** -- it's
+  implemented from the same crashdump.h/build.ps1 mechanics the Windows
+  CDB smoke test already validates, but this repo's development sandbox
+  has no Windows box to run it on. A plain `abort()` call (glibc's usual
+  mechanism for the `double-free`/`heap-corruption`-style examples) does
+  not raise a structured exception on Windows and so never reaches
+  `SetUnhandledExceptionFilter` -- those examples may legitimately report
+  "not reproduced" here until a real CI run shows what MSVC's release
+  heap actually does for each one, the same way the aarch64 findings
+  above were discovered empirically rather than assumed up front.
+
 ## CI
 
 A `.github/workflows/ci.yml` job (`eval`) runs this harness on every push to
 `master` using a real `ubuntu-latest` runner (full internet access, so
-`gdb` installs cleanly and there's no sandboxed-core-dump restriction). See
-that job for the exact setup steps this README assumes.
+`gdb` installs cleanly and there's no sandboxed-core-dump restriction).
+Sibling `macos-eval` and `windows-eval` jobs run the same harness with
+`lldb`/`cdb` on `macos-latest`/`windows-latest`. See those jobs for the
+exact setup steps this README assumes.
