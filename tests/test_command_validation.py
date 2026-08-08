@@ -69,7 +69,7 @@ class TestExtraCodeExecutionPrimitives:
 
     @pytest.mark.parametrize(
         "command",
-        ["python import os; os.system('whoami')", "pi print(1)", "call system(\"whoami\")"],
+        ["python import os; os.system('whoami')", "pi print(1)", 'call system("whoami")'],
     )
     def test_gdb_blocks_code_exec_primitives(self, command):
         with pytest.raises(McpError):

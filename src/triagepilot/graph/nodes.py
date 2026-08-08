@@ -178,7 +178,9 @@ def root_cause_node(state: dict) -> dict:
         if state.get("stack_trace"):
             context_parts.append(f"## Stack Trace\n{redact_sensitive(state['stack_trace'])}")
         if state.get("faulting_source"):
-            context_parts.append(f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}")
+            context_parts.append(
+                f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}"
+            )
 
         context = "\n\n".join(context_parts)
         prompt = (
@@ -213,7 +215,9 @@ def suggest_fix_node(state: dict) -> dict:
         if state.get("root_cause"):
             context_parts.append(f"## Root Cause\n{state['root_cause']}")
         if state.get("faulting_source"):
-            context_parts.append(f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}")
+            context_parts.append(
+                f"## Faulting Source\n{redact_sensitive(state['faulting_source'])}"
+            )
         if state.get("analyze_output"):
             context_parts.append(
                 f"## Crash Analysis\n{redact_sensitive(state['analyze_output'][:2000])}"
