@@ -195,6 +195,96 @@ jobs:
           name: eval-results
           path: eval/results.md
 
+  linux-gdb-smoke-test:
+    name: Linux GDB Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install gdb
+        run: sudo apt-get update && sudo apt-get install -y gdb
+      - name: Allow core dumps (disable apport redirection)
+        run: echo core | sudo tee /proc/sys/kernel/core_pattern
+      - run: uv sync --dev
+      - name: Build and crash a Linux example, generating a real core
+        # ulimit must be set in the same shell invocation that runs the
+        # crashing binary -- it doesn't carry over between separate `run:`
+        # steps. The "core" pattern set above writes a single ./core file
+        # (no %p) in the process's cwd, so running from a scratch dir gives
+        # a fixed, predictable path.
+        run: |
+          mkdir -p /tmp/gdb-live-test
+          g++ -g -O0 -std=c++17 -Iexamples/common -o /tmp/gdb-live-test/use-after-free examples/common/use-after-free.cpp
+          cd /tmp/gdb-live-test
+          ulimit -c unlimited
+          ./use-after-free || true
+          if [ ! -f core ]; then
+            echo "ERROR: no core file produced" >&2
+            exit 1
+          fi
+          echo "TRIAGEPILOT_LIVE_GDB_DUMP=/tmp/gdb-live-test/core" >> "$GITHUB_ENV"
+          echo "TRIAGEPILOT_LIVE_GDB_BINARY=/tmp/gdb-live-test/use-after-free" >> "$GITHUB_ENV"
+      - name: Run live GDB integration tests
+        # Exercises the CLI-fallback-mode marker-isolation and
+        # timeout-recovery fixes, plus a sanity check on MI mode's
+        # SIGINT-on-timeout addition, against a real gdb -- see
+        # tests/test_gdb_live.py for what each test proves.
+        run: uv run pytest tests/test_gdb_live.py -v --tb=short
+      - name: Upload core + binary on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-gdb-smoke-test-artifacts
+          path: /tmp/gdb-live-test/
+
+  macos-lldb-smoke-test:
+    name: macOS LLDB Smoke Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      # setup-uv publishes immutable releases and no longer moves floating
+      # major-version tags (e.g. @v8), so it must be pinned to an exact
+      # commit SHA with the version as a comment, per its own README.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --dev
+      - name: Build macOS crash examples
+        run: |
+          cd examples/macos
+          chmod +x build.sh
+          ./build.sh
+      - name: Generate a real core dump
+        # gen_core_mac.sh runs the binary under lldb itself and saves a
+        # core via `process save-core` at the moment of the crash, which
+        # sidesteps macOS's ReportCrash interception and /cores permission
+        # issues that plague plain `ulimit -c unlimited` (see the script's
+        # own comments). Output paths are fixed, not PID-based.
+        run: |
+          cd examples/macos
+          chmod +x gen_core_mac.sh
+          ./gen_core_mac.sh use-after-free
+          echo "TRIAGEPILOT_LIVE_LLDB_DUMP=$(pwd)/build/out/core.use-after-free" >> "$GITHUB_ENV"
+          echo "TRIAGEPILOT_LIVE_LLDB_BINARY=$(pwd)/build/out/use-after-free" >> "$GITHUB_ENV"
+      - name: Run live LLDB integration tests
+        # Exercises the marker-isolation, timeout-recovery, and shutdown
+        # fixes against a real lldb -- see tests/test_lldb_live.py for
+        # what each test proves.
+        run: uv run pytest tests/test_lldb_live.py -v --tb=short
+      - name: Upload core + binary on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-lldb-smoke-test-artifacts
+          path: examples/macos/build/out/
+
   windows-cdb-smoke-test:
     name: Windows CDB Smoke Test
     runs-on: windows-latest
