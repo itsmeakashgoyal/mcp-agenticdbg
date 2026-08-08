@@ -172,6 +172,33 @@ cd examples && .\build.ps1         # Windows (MSVC)
 ./gen_core_mac.sh use-after-free   # writes build/out/core.use-after-free
 ```
 
+## Continuous Integration
+
+Every push runs `lint`, `type-check`, and the `pytest` suite across Python
+3.10-3.12 on Linux, macOS, and Windows. On top of that, two dedicated jobs
+verify the server actually **installs and runs** on all three platforms
+using the exact commands from Quick Start above (not the dev/test
+environment the other jobs use):
+
+- `verify-install-pip` — `pip install -e .` then a real MCP handshake
+  (`initialize` → `list_tools` → `list_prompts`) against the installed
+  `triagepilot` console script
+- `verify-install-uv` — `uv sync` then the same handshake via `uv run triagepilot`
+
+The handshake itself is `scripts/verify_mcp_server.py`, which uses the
+official `mcp` client SDK to spawn the server over stdio and confirm the
+core tools (`analyze_dump`, `open_dump`, `run_debugger_cmd`, etc.) and the
+triage prompt are actually registered and reachable — not just that the
+CLI parses `--help`. No debugger or crash dump is required for this check;
+server startup never touches a debugger until a tool call names one.
+
+Run it yourself after installing:
+
+```bash
+python scripts/verify_mcp_server.py                              # pip install -e . / plain venv
+uv run python scripts/verify_mcp_server.py --command "uv run triagepilot"
+```
+
 ## Evaluation
 
 `eval/` contains a benchmark that runs every example above through

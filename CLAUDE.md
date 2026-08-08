@@ -49,6 +49,16 @@ cd examples/macos && bash build.sh       # macOS
 cd examples\windows && .\build.ps1       # Windows (MSVC)
 ```
 
+### Verifying the MCP Server Installs Correctly
+```bash
+pip install -e . && python scripts/verify_mcp_server.py                          # pip path
+uv sync && uv run python scripts/verify_mcp_server.py --command "uv run triagepilot"  # uv path
+```
+Spawns the installed server over stdio and runs a real MCP handshake
+(`initialize` → `list_tools` → `list_prompts`) via the official `mcp`
+client SDK. CI runs this on Linux/macOS/Windows for both install paths
+(`verify-install-pip` / `verify-install-uv` jobs in `ci.yml`).
+
 ### Running the Crash-Triage Eval
 ```bash
 uv run python eval/run_eval.py           # Requires gdb (Linux) or lldb (macOS) on PATH

@@ -65,6 +65,7 @@ See `CLAUDE.md` for detailed architecture documentation. Key directories:
 - `tests/` — Test suite
 - `examples/` — Intentional crash programs used for manual triage practice and the eval harness
 - `eval/` — Crash-triage eval harness (`run_eval.py`) and ground truth (`ground_truth.py`); see `eval/README.md`
+- `scripts/` — Standalone maintenance/CI scripts, e.g. `verify_mcp_server.py` (cross-platform install smoke test)
 
 ## Filing Issues
 
