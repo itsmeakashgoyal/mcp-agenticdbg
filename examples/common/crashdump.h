@@ -37,7 +37,17 @@ static LONG WINAPI CrashDumpHandler(EXCEPTION_POINTERS *pExInfo)
     if (lastSlash)
         *(lastSlash + 1) = '\0';
 
-    const char *baseName = lastSlash ? lastSlash + 1 : exePath;
+    /* baseName must be found in the ORIGINAL exePath, not exeDir: exeDir's
+     * byte right after its last backslash was just overwritten with '\0'
+     * above, so "lastSlash + 1" (a pointer into exeDir) always pointed at
+     * that same null terminator -- baseName was unconditionally an empty
+     * string. That produced dump filenames like ".<pid>.dmp" (no program
+     * name), which glob.glob("*.dmp") in eval/run_eval.py silently skips
+     * as a hidden file even though the dump was written correctly --
+     * PowerShell's Get-ChildItem doesn't apply that convention, which is
+     * why run-all.ps1 never surfaced this. */
+    char *baseNameSlash = strrchr(exePath, '\\');
+    const char *baseName = baseNameSlash ? baseNameSlash + 1 : exePath;
 
     char dumpDir[MAX_PATH];
     sprintf_s(dumpDir, MAX_PATH, "%sdumps", exeDir);

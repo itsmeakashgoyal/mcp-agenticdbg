@@ -122,31 +122,71 @@ implementations write different artifacts:
   Windows for the same reason `build.ps1` excludes it (raw POSIX
   pthreads, no MSVC equivalent).
 
-### Known gaps from the first real runs
-
-The first `macos-eval`/`windows-eval` CI runs (this repo's development
-sandbox has no macOS or Windows box to test against beforehand) turned up:
-
-- **macOS: 14/17 reproduced.** `heap-metadata-corruption` and `thread-uaf`
-  did not, expectedly -- their determinism hardening (see the table above)
-  calls glibc's `malloc_usable_size()` and targets glibc's own chunk
-  layout, which doesn't exist on macOS's libmalloc. `iterator-invalidation`
-  also did not reproduce, for a reason not yet root-caused.
-- **Windows: 0/16 reproduced**, including `use-after-free`, which the
-  `windows-cdb-smoke-test` CI job separately proves *does* crash and write
-  a `.dmp` reliably via the exact same crashdump.h mechanism. Getting zero
-  reproductions there rather than a partial result suggests a bug in this
-  harness's own crash-detection path (e.g. a `.dmp`-directory mismatch
-  between where `_build_binary_windows` compiles to and where
-  `_run_until_crash_windows` watches) rather than a fundamental platform
-  limitation -- unconfirmed pending a run with the diagnostic capture
-  below.
-
-Every non-reproduction now carries the crashing process's own last-attempt
+Every non-reproduction carries the crashing process's own last-attempt
 output (crashdump.h's prints, or a bare exit code if nothing printed) in
 `results.md`'s Notes section under a collapsible "last run's output"
-block, specifically so findings like the above can be root-caused from the
-CI artifact instead of guessed at.
+block, so findings like the ones below were root-caused from the CI
+artifact, not guessed at.
+
+### macOS: 14/17 (root-caused)
+
+`heap-metadata-corruption`, `thread-uaf`, and `iterator-invalidation` all
+ran to completion with exit status 0 -- no crash at all, confirmed from
+each one's captured output. All three rely on a freed allocation being
+reused (or at least still faulting when touched through the stale
+pointer) rather than sitting untouched in a per-size-class free list; that
+behavior is allocator-specific and doesn't hold on macOS's libmalloc the
+way it does on glibc (`heap-metadata-corruption` additionally calls
+glibc's `malloc_usable_size()` directly, which doesn't exist on macOS at
+all). Not a TriagePilot bug or a harness bug -- the same category of
+example-program determinism the aarch64 findings above already document,
+just on a different allocator.
+
+### Windows: was 0/16, root cause found and fixed
+
+Every non-reproduction's captured output pointed to the same bug once
+diagnosed: `crashdump.h`'s Windows `CrashDumpHandler()` computed the
+dump's base filename from a buffer it had *already null-terminated to an
+empty string one line earlier*, so every dump was actually written
+successfully as `<dumpDir>\.{pid}.dmp` (no program name, leading dot) --
+confirmed by output like `[crashdump] Dump written: ...\dumps\.8916.dmp`
+for `use-after-free`. `eval/run_eval.py`'s `glob.glob("*.dmp")` silently
+skips leading-dot filenames as hidden (a convention baked into Python's
+`glob` module on every platform, not just POSIX), so it never saw them --
+while `run-all.ps1`'s `Get-ChildItem -Filter "*.dmp"` has no such
+convention and found them fine, which is why `windows-cdb-smoke-test`
+never caught this. Fixed in `crashdump.h`; expect most access-violation
+examples to reproduce once this lands in CI.
+
+That fix does not cover every example, though -- the captured output also
+surfaced two categories of crash that never reach
+`SetUnhandledExceptionFilter` at all, confirmed by their exit codes:
+
+- `double-free`, `heap-corruption`, and `concurrent-vector-race` exit with
+  `0xC0000374` (`STATUS_HEAP_CORRUPTION`), and `exception-in-destructor-terminate`
+  / `lock-order-inversion-deadlock` (both `abort()`-based) exit with
+  `0xC0000409`. Both are Windows `__fastfail` codes -- by design, `__fastfail`
+  bypasses the normal SEH dispatch (including `SetUnhandledExceptionFilter`)
+  unless a debugger is already attached, specifically so a corrupted-heap
+  process can't have its termination hijacked. A registered handler in the
+  target process itself structurally cannot catch these; the ones on macOS
+  and Linux reach a handler because they're a plain `raise(SIGABRT)`, not an
+  OS-level fail-fast.
+- `stack-overflow`, `stack-buffer-overrun`, and `cyclic-refcount-stack-overflow`
+  exit `0xC0000005` with no "Dump written" line at all -- consistent with
+  the handler itself faulting from stack exhaustion before it can finish
+  (writing a dump needs real stack space, and a stack-overflow-triggered
+  handler doesn't have much left). Fixable with a dedicated alternate stack
+  for the handler, not attempted yet.
+
+Closing both gaps for real would mean running each example under `cdb.exe`
+itself (already installed in the `windows-eval` CI job for the later
+analysis step, just unused during crash capture) rather than relying on
+the target's own in-process handler -- the same shift already made for
+macOS (`lldb --batch ... --one-line-on-crash`), since a debugger *is*
+notified of `__fastfail` exceptions even when a standalone process isn't.
+Not implemented yet; flagging it as the clear next step rather than
+guessing at a fix with no Windows box to verify it against.
 
 ## CI
 

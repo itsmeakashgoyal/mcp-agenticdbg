@@ -178,6 +178,16 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
         expected_signals=("SIGSEGV",),
         expected_functions=("finalize_sample",),
         expected_file="iterator-invalidation.cpp",
+        notes=(
+            "Did not reproduce in the first macos-eval and windows-eval CI runs "
+            "(real result, not guessed; see eval/README.md) -- both ran to "
+            "completion with exit status 0, no crash. Same category as "
+            "thread-uaf: relies on a freed small vector buffer being reused (or "
+            "at least still faulting when touched) rather than sitting untouched "
+            "in a per-size-class free list, which is allocator-specific and "
+            "apparently doesn't hold on libmalloc (macOS) or MSVC's release heap "
+            "(Windows) the way it does on glibc."
+        ),
     ),
     CrashGroundTruth(
         name="exception-in-destructor-terminate",
