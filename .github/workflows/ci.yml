@@ -19,7 +19,16 @@ jobs:
       # setup-uv publishes immutable releases and no longer moves floating
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
+      #
+      # cache-suffix: every job/matrix-leg below needs a *distinct* value --
+      # setup-uv's own cache key already varies by OS/arch, but not by job,
+      # so without this every job on the same OS races to save an identical
+      # cache key and most lose with a benign but noisy "Unable to reserve
+      # cache ... another job may be creating this cache" warning. See
+      # https://github.com/astral-sh/setup-uv#cache for the cache-suffix option.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: lint
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -36,6 +45,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: type-check
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -56,6 +67,11 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          # setup-uv's own cache key already varies by OS/arch; the
+          # python-version needs to be added explicitly since three matrix
+          # legs otherwise share an OS and would race for the same key.
+          cache-suffix: test-${{ matrix.python-version }}
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
@@ -127,6 +143,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: verify-install-uv
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -173,6 +191,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: eval
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -204,6 +224,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: macos-eval
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -232,10 +254,19 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: windows-eval
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      # step-security/msvc-dev-cmd is a maintained, node24-based drop-in
+      # replacement for ilammy/msvc-dev-cmd (same inputs: arch, sdk,
+      # spectre, toolset, uwp, vsversion) -- ilammy's own action.yml still
+      # declares "using: node20" as of this writing (upstream looks
+      # unmaintained; last tagged release is from Jan 2024), which GitHub
+      # now flags as deprecated on every run even though it's transparently
+      # re-executed on Node 24 today.
+      - uses: step-security/msvc-dev-cmd@22c98154b708dbd743e6f27a933cf6ceba3305c4 # v1.13.1
       - name: Install WinDbg from Microsoft Store
         run: winget install 9PGJGD53TN86 --accept-source-agreements --accept-package-agreements
       - run: uv sync --dev
@@ -268,6 +299,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: linux-gdb-smoke-test
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -324,6 +357,8 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: macos-lldb-smoke-test
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -376,13 +411,19 @@ jobs:
       # major-version tags (e.g. @v8), so it must be pinned to an exact
       # commit SHA with the version as a comment, per its own README.
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          cache-suffix: windows-cdb-smoke-test
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      # Pinned to an exact commit, matching this repo's convention for
-      # third-party actions; the floating v1 tag currently resolves to
-      # this commit (msvc-dev-cmd v1.13.0). Puts cl.exe/link.exe on PATH.
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      # step-security/msvc-dev-cmd is a maintained, node24-based drop-in
+      # replacement for ilammy/msvc-dev-cmd (same inputs: arch, sdk,
+      # spectre, toolset, uwp, vsversion) -- ilammy's own action.yml still
+      # declares "using: node20" as of this writing (upstream looks
+      # unmaintained; last tagged release is from Jan 2024), which GitHub
+      # now flags as deprecated on every run even though it's transparently
+      # re-executed on Node 24 today. Puts cl.exe/link.exe on PATH.
+      - uses: step-security/msvc-dev-cmd@22c98154b708dbd743e6f27a933cf6ceba3305c4 # v1.13.1
       - name: Create log directory
         run: New-Item -ItemType Directory -Path "$env:GITHUB_WORKSPACE\ci-logs" -Force | Out-Null
       # Same package + approach upstream mcp-windbg's own CI uses to get a
