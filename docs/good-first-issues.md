@@ -156,47 +156,27 @@ branch is a complete, working reference implementation to mirror.
 
 ## 4. Windows eval: capture `__fastfail` crashes by running examples under `cdb.exe`
 
-**Label:** `help wanted`
+**Status:** Done — verified 16/16 reproduced at 100%, do not file this issue.
 
-### Problem
+`_run_until_crash_windows` in `eval/run_eval.py` now launches each example
+under `cdb.exe` (`-g -G -hd -c "g;.dump /ma <path>;q"`) instead of running it
+directly and watching `<exe-dir>\dumps\` for crashdump.h's own
+`SetUnhandledExceptionFilter` dump — the same shift already made for macOS
+(`lldb --batch ... --one-line-on-crash`). A debugger attached at launch is
+notified of `__fastfail` exceptions (`double-free`, `heap-corruption`,
+`concurrent-vector-race`, `exception-in-destructor-terminate`,
+`lock-order-inversion-deadlock`) first-chance, so cdb can write the dump
+itself before the process would otherwise terminate unseen.
 
-Five Windows eval examples never reproduce: `double-free`,
-`heap-corruption`, `concurrent-vector-race` (exit `0xC0000374`,
-`STATUS_HEAP_CORRUPTION`) and `exception-in-destructor-terminate` /
-`lock-order-inversion-deadlock` (both `abort()`-based, exit
-`0xC0000409`). All five never reach `crashdump.h`'s
-`SetUnhandledExceptionFilter` handler at all.
-
-Root cause (already diagnosed, see `eval/README.md`'s Windows section):
-these are Windows `__fastfail` codes. By design, `__fastfail` bypasses
-normal SEH dispatch unless a debugger is already attached — specifically
-so a corrupted-heap process can't have its termination hijacked by its
-own (possibly also corrupted) handler. A handler registered in the
-target process itself structurally cannot catch these.
-
-### Proposal
-
-Run each example under `cdb.exe` itself during crash capture (already
-installed in the `windows-eval` CI job for the later analysis step,
-just unused during crash capture) rather than relying on the target's
-own in-process handler — a debugger *is* notified of `__fastfail`
-exceptions even when a standalone process isn't. This is the same shift
-already made for macOS (`lldb --batch ... --one-line-on-crash`) to solve
-an analogous problem there.
-
-### Where to look
-
-- `eval/run_eval.py`'s `_run_until_crash_windows` — the current
-  subprocess-based crash capture to replace/extend
-- `eval/run_eval.py`'s `_run_until_crash_macos` — the lldb-wrapped
-  pattern to mirror for Windows/cdb.exe
-- `examples/windows/cdb_triage_demo.py` — existing cdb.exe invocation
-  patterns in this repo to reuse
-
-### Why this is `help wanted` rather than `good first issue`
-
-Bigger lift than the others: needs a working cdb.exe command-line
-invocation that runs a target, catches the fault, and writes a dump —
-analogous to `process save-core` on macOS but with different syntax and
-failure modes, and needs verifying against a real Windows machine or CI
-runner to get right.
+Closing the gap fully needed four more fixes beyond the capture mechanism
+itself (a `!analyze -v` timeout bug that was poisoning every other analysis
+section, a missing signal-code mapping, a `thread-uaf.cpp` MSVC port, and
+three separate source-localization bugs) -- see `eval/README.md`'s Windows
+section for the full breakdown. Verified directly against a real Windows 11
+machine (Visual Studio 2022's `cl.exe`, WinDbg's `cdb.exe` installed via
+`winget install Microsoft.WinDbg`), not just reasoned about: 16/16 examples
+reproduce at 100% aggregate accuracy, stable across 5 consecutive full runs.
+`heap-metadata-corruption` is excluded (same treatment as its existing macOS
+exclusion, not a regression) -- see `eval/run_eval.py`'s
+`_PLATFORM_EXCLUSIONS` and `eval/README.md` for why a Windows-specific
+technique wasn't attempted.

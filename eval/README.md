@@ -117,12 +117,11 @@ implementations write different artifacts:
   The harness runs each binary under
   `lldb --batch -o run --one-line-on-crash "process save-core ..."`
   instead, exactly like that script.
-- **Windows** -- crashdump.h's `SetUnhandledExceptionFilter` handler
-  writes a `.dmp` under `<exe-dir>\dumps\` rather than a POSIX core file,
-  so the harness watches that directory for a new file instead of
-  checking the process's exit-code sign. `thread-uaf` is skipped on
-  Windows for the same reason `build.ps1` excludes it (raw POSIX
-  pthreads, no MSVC equivalent).
+- **Windows** -- runs each example under `cdb.exe` itself
+  (`-g -G -hd -c "g;.dump /ma <path>;q"`) rather than trusting
+  crashdump.h's in-process `SetUnhandledExceptionFilter` handler, so a
+  debugger is already attached when the crash happens -- see the
+  "Windows" section below for why that specifically matters.
 
 Every non-reproduction carries the crashing process's own last-attempt
 output (crashdump.h's prints, or a bare exit code if nothing printed) in
@@ -247,7 +246,7 @@ update changes lldb's unwinder, or if someone wants to dig into whether
 an lldb setting can force DWARF-based unwinding through this specific
 frame.
 
-### Windows: was 0/16, now 8/16 after two fixes
+### Windows: was 0/16, now 16/16 reproduced at 100% (real Windows 11, real cdb 10.0.29617.1000/cl.exe 19.42)
 
 Every non-reproduction's captured output pointed to the same bug once
 diagnosed: `crashdump.h`'s Windows `CrashDumpHandler()` computed the
@@ -271,38 +270,153 @@ along, just caught mid-retry on an attempt whose diagnostic happened to
 get captured before the print. Worth noting since it's a reminder to
 trust the next real result over a plausible-sounding theory.
 
-The remaining 8 fall into three categories, confirmed by exit code:
+That fix alone took Windows from 0/16 to 8/16, then 9/16 once
+`cyclic-refcount-stack-overflow`'s CDB-session-timeout fix (below) landed.
+Closing the rest of the gap turned out to need five more fixes, all
+confirmed directly against a real Windows 11 box (Visual Studio 2022's
+`cl.exe` 19.42.34440, WinDbg's `cdb.exe` 10.0.29617.1000 installed via
+`winget install Microsoft.WinDbg`) rather than guessed at or left for CI to
+discover -- **16/17 examples now run** (`thread-uaf` is fixed below;
+`heap-metadata-corruption` is excluded, same as macOS) and **all 16
+reproduce at 100% aggregate accuracy**, up from 9/16 at 70%. Stable across
+repeated runs (verified 5 consecutive full passes, all 16/16 at 100%).
 
-- `double-free`, `heap-corruption`, `concurrent-vector-race` (exit
-  `0xC0000374`, `STATUS_HEAP_CORRUPTION`) and `exception-in-destructor-terminate`
-  / `lock-order-inversion-deadlock` (both `abort()`-based, exit `0xC0000409`)
-  never reach `SetUnhandledExceptionFilter` at all. Both are Windows
-  `__fastfail` codes -- by design, `__fastfail` bypasses normal SEH dispatch
-  unless a debugger is already attached, specifically so a corrupted-heap
-  process can't have its termination hijacked by its own (possibly also
-  corrupted) handler. A handler registered in the target process itself
-  structurally cannot catch these; the same crashes reach a handler on
-  macOS/Linux because they're a plain `raise(SIGABRT)`, not an OS-level
-  fail-fast. Closing this gap means running each example under `cdb.exe`
-  itself (already installed in the `windows-eval` CI job for the later
-  analysis step, just unused during crash capture) rather than relying on
-  the target's own in-process handler -- the same shift already made for
-  macOS (`lldb --batch ... --one-line-on-crash`), since a debugger *is*
-  notified of `__fastfail` exceptions even when a standalone process isn't.
-  Not implemented yet.
-- `heap-metadata-corruption` and `iterator-invalidation` -- same
-  allocator-determinism category as the macOS findings above (confirmed
-  from captured output: both exit status 0, no crash).
-- `cyclic-refcount-stack-overflow` reproduced the crash and wrote a dump
-  fine, but then failed with `CDBError: CDB initialization timed out` --
-  a *different* kind of failure from the others (it counts as "no" in the
-  table with no diagnostic block, since `run_until_crash` succeeded and
-  the failure happened afterwards, in `create_session()`). Its
-  `MiniDumpWithFullMemory` dump plus CDB's symbol loading for a
-  deeply-templated shared_ptr/STL recursion apparently needs more than
-  the eval's 30s session timeout on a loaded CI runner, even though
-  gdb/lldb open the equivalent dump for the same example in well under
-  that. Bumped the eval's session timeout to 90s.
+**1. `__fastfail` crashes ($5$ examples: `double-free`, `heap-corruption`,
+`concurrent-vector-race`, `exception-in-destructor-terminate`,
+`lock-order-inversion-deadlock`) never reached `SetUnhandledExceptionFilter`
+at all.** All five are Windows `__fastfail` codes (`STATUS_HEAP_CORRUPTION`
+`0xC0000374` or the `abort()`-based `STATUS_STACK_BUFFER_OVERRUN`
+`0xC0000409`) -- by design, `__fastfail` bypasses normal SEH dispatch,
+including a handler registered in the target process itself, unless a
+debugger is already attached, specifically so a corrupted-heap process
+can't have its termination hijacked by its own (possibly also corrupted)
+handler. Fixed by rewriting `_run_until_crash_windows` to run each example
+under `cdb.exe` itself (`-g -G -hd -c "g;.dump /ma <path>;q"`, the exception
+first-chance analogue of macOS's `lldb --batch ... --one-line-on-crash`)
+instead of trusting the target's own in-process handler -- a debugger *is*
+notified of `__fastfail` exceptions even when a standalone process isn't, so
+cdb can write the dump itself before the process would otherwise terminate
+unseen. Confirmed live: this alone reproduced all five.
+
+**2. `!analyze -v` was silently failing (and poisoning every section after
+it) on every single example, not just the five above** -- the reason
+signal/source scoring was weak even for examples that *did* reproduce.
+Root cause: `run_crash_analysis()`'s internal `_try()` helper always
+substituted `self.timeout` for a bare `None`, which defeated
+`send_command()`'s own activity-based patience for commands in
+`SLOW_COMMAND_PREFIXES` (`!analyze`, `~*kb`, `vertarget`, ...) -- confirmed
+live that `!analyze -v` can legitimately take **~159 seconds** (mostly a
+first-use online WER bucket-ID lookup; `Analysis.IO.Write.Mb` alone was 90),
+comfortably past the 90s ceiling this eval passed as the session timeout,
+and once it hard-failed at that ceiling every later section (`Registers`,
+`Loaded Modules`, `Target Info`) failed too. Fixed in
+`backends/cdb.py`'s `_try()` (pass `cmd_timeout` through as-is instead of
+pre-resolving `None`) and bumped the eval's own session timeout to 200s for
+headroom above the observed 159s.
+
+**3. CDB's exception-type extraction has no fallback when `!analyze -v`'s
+`EXCEPTION_RECORD`/`BUGCHECK_STR` block isn't present**, and by its own
+test contract (`test_extract_cdb_signature`) returns Windows-native labels
+("ACCESS_VIOLATION") rather than POSIX names anyway, so it was never going
+to satisfy `ground_truth.py`'s `SIGSEGV`/`SIGABRT` entries for this backend
+even when fix #2 above makes `!analyze -v` reliable. The eval's own
+capture-time signal derivation (deleted from an earlier draft of the
+`cdb.exe`-launch rewrite in #1, on the mistaken assumption
+`extract_crash_signature` would cover it) is what actually needs to carry
+this: `_run_until_crash_windows` now maps the NTSTATUS code from cdb's own
+stop-reason line to the nearest POSIX signal
+(`_WINDOWS_NTSTATUS_TO_SIGNAL`), taking the *last* `code XXXXXXXX` match in
+cdb's transcript rather than the first (confirmed live: cdb's own startup
+chatter can print an earlier, unrelated code -- observed `STATUS_BREAKPOINT`
+`0x80000003` from the loader breakpoint `-g` auto-continues past -- before
+the real crash).
+
+**4. `concurrent-vector-race`'s genuine data race can manifest as *either*
+a plain access violation *or* `STATUS_BREAKPOINT` (`0x80000003`)** -- confirmed
+live across repeated runs (mostly `SIGSEGV`, occasionally
+`!analyze -v`'s own `Failure.Bucket` reading
+`HEAP_CORRUPTION_ACTIONABLE_..._DOUBLE_FREE_80000003_...`): Windows'
+page-heap/heap-corruption detection breaking in via a breakpoint exception
+rather than a `__fastfail` code, for what's fundamentally the same class of
+bug `double-free.cpp`/`heap-corruption.cpp` trigger. Added to the same
+NTSTATUS map from #3, mapped to `SIGABRT` (already one of this example's
+`expected_signals`).
+
+**5. Source localization had three separate, real bugs** surfaced by
+examples whose faulting *frame* is a library/CRT function rather than user
+code -- not Windows-specific mechanisms, but only exercised by CDB's
+`SYMBOL_NAME`/stack-frame search path (`locate_faulting_source()`'s Level
+2/3a in `debugger_tools.py`), so they never showed up scoring GDB/LLDB's
+richer `at file:line` debug info on Linux/macOS:
+   - `_find_function_in_repo()` accepted a `module_hint` but only used it
+     for *display*, never to rank matches -- so a generic name defined in
+     many files (every example's own `main`) could rank the wrong file's
+     definition into the truncated `max_show=3` list instead of the real
+     one. Worse, the substring check it *did* do for ranking
+     (`module_hint in filepath`) can never match on Windows anyway: a
+     PE/COFF module name can't contain a hyphen, so CDB reports MSVC-built
+     `double-free.exe` as module `double_free`, and `"double_free" in
+     ".../double-free.cpp"` is false. Fixed: strip `-`/`_` from both sides
+     before comparing.
+   - Destructors defined inline in the class body (`~Foo() {`, no
+     `ClassName::` qualifier) never matched either of the two "definition"
+     regexes -- both require a word-boundary or `::` immediately before the
+     name, and `~` is itself non-word, so there's never a `\w`/`\W`
+     transition for `\b` to anchor on between it and preceding whitespace.
+     Confirmed live: `exception-in-destructor-terminate.cpp`'s inline
+     `~ScopedTransaction`. Fixed with a dedicated pattern for names
+     starting with `~`.
+   - A function name that's a library/CRT call (`abort`, `free`, `memcpy`,
+     ...) rather than something the user defines can still text-match a
+     *call site* elsewhere in the repo -- confirmed live that a search for
+     `abort` (the top-of-stack frame for a `__fastfail` example) matched a
+     bare `abort();` call in `lock-order-inversion-deadlock.cpp`, and
+     separately matched a *comment* mentioning `abort()` before that was
+     fixed with basic C/C++ comment-stripping. Static CRT linking (`/MT`)
+     also means module-name filtering alone can't rule these out --
+     `double_free!abort` attributes CRT code to the user's own module, not
+     `ucrtbase`. Fixed with a skip-list of well-known runtime function
+     names and system module names (mirrors the skip-list
+     `_extract_gdb_functions()` already used for the same reason on the GDB
+     path) -- plus excluding `.venv`/`site-packages`-style dependency
+     directories from the search entirely, the Python equivalent of the
+     `node_modules` exclusion already there, after a search for `abort`
+     landed on a vendored `mypyc` runtime file inside this repo's own
+     `.venv`.
+
+**`thread-uaf` is no longer excluded on Windows.** It used raw POSIX
+pthreads (`<pthread.h>`, `sched_yield()`), which have no MSVC equivalent;
+ported to `std::thread`/`std::this_thread::yield()` (same as
+`lock-order-inversion-deadlock.cpp`, `concurrent-vector-race.cpp`,
+`detached-thread-dangling-stack.cpp` already did) and its custom
+`operator new`/`delete` to `VirtualAlloc`/`VirtualFree(MEM_DECOMMIT)`
+(mirroring `iterator-invalidation.cpp`'s `DirectMapAllocator`). Confirmed
+live: reproduces reliably, `100%` score.
+
+**`heap-metadata-corruption` is excluded on Windows, same as macOS.** Its
+deterministic-reproduction technique (stomping a neighboring chunk's own
+size header at the exact offset `malloc_usable_size()` computes) is guarded
+behind `HMC_GLIBC_TECHNIQUE`, on only for Linux+glibc; without it, the
+underlying off-by-one bug is real but not reliably fatal (confirmed live:
+exits 0 every attempt on real Windows). A Windows-specific equivalent would
+need reverse-engineering the NT Heap/LFH chunk layout, which -- unlike
+glibc's plain-text header -- has been cookie-obfuscated since Windows 8;
+the same class of fragile, version-specific problem that got this example
+excluded on macOS rather than attempted. See `_PLATFORM_EXCLUSIONS` in
+`eval/run_eval.py`.
+
+One earlier finding is now fully resolved rather than a remaining gap:
+`cyclic-refcount-stack-overflow` used to reproduce the crash and write a
+dump fine, but then fail with `CDBError: CDB initialization timed out` --
+a *different* kind of failure from the others (it counted as "no" in the
+table with no diagnostic block, since `run_until_crash` succeeded and the
+failure happened afterwards, in `create_session()`). Its
+`MiniDumpWithFullMemory` dump plus CDB's symbol loading for a
+deeply-templated shared_ptr/STL recursion apparently needs more than a 30s
+session timeout on a loaded runner, even though gdb/lldb open the
+equivalent dump for the same example in well under that. Bumped the eval's
+session timeout (30s -> 90s -> 200s, the last bump for finding #2 above);
+reproduces reliably now, confirmed across 5 consecutive full runs.
 
 ## CI
 

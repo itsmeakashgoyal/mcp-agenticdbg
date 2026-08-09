@@ -25,9 +25,7 @@ cd examples\windows
 .\build.ps1
 ```
 
-This compiles every example from `..\common\` (except `thread-uaf.cpp`,
-which uses raw POSIX pthreads with no MSVC equivalent -- see the comment
-in `build.ps1`) with full debug symbols:
+This compiles every example from `..\common\` with full debug symbols:
 - `/Zi` -- generate PDB debug info
 - `/Od` -- no optimization (clean stack traces)
 - `/GS-` -- disable stack cookies (show raw corruption)
@@ -48,7 +46,13 @@ Or run a single example:
 .\run-all.ps1 -Name use-after-free
 ```
 
-Each program crashes and writes a `.dmp` file to `build\out\dumps\`. The script prints a summary table showing which dumps were created.
+The script runs each program under `cdb.exe` itself (rather than launching
+it directly) so a debugger is already attached when it crashes -- some of
+these examples crash via a Windows `__fastfail` code, which bypasses normal
+exception handling unless a debugger is present. cdb writes a `.dmp` file
+to `build\out\dumps\<name>.dmp`; the script prints a summary table showing
+which dumps were created (`heap-metadata-corruption` won't produce one --
+see `eval/README.md`'s Windows section for why).
 
 ## 4. Analyze with TriagePilot (MCP Tools)
 
@@ -56,7 +60,7 @@ Start TriagePilot and use the MCP tools from your AI assistant:
 
 ```
 # Full crash analysis (runs !analyze -v, backtraces, registers, modules)
-analyze_dump  examples\windows\build\out\dumps\use-after-free.exe.1234.dmp
+analyze_dump  examples\windows\build\out\dumps\use-after-free.dmp
 
 # Run specific CDB commands
 run_debugger_cmd  .ecxr

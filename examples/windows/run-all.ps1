@@ -1,7 +1,18 @@
 # run-all.ps1 — Execute every crash example and collect the dumps.
 #
-# Each example self-dumps via crashdump.h, writing a .dmp file into
-# <exe-dir>\dumps\ before terminating.
+# Runs each example under cdb.exe (-g -G -hd -c "g;.dump /ma <path>;q")
+# rather than launching it directly and waiting for crashdump.h's own
+# SetUnhandledExceptionFilter handler to write a dump: double-free,
+# heap-corruption, concurrent-vector-race, exception-in-destructor-
+# terminate, and lock-order-inversion-deadlock all crash via a Windows
+# __fastfail code (STATUS_HEAP_CORRUPTION / STATUS_STACK_BUFFER_OVERRUN),
+# which by design bypasses normal SEH dispatch -- including a handler
+# registered in the target process itself -- unless a debugger is already
+# attached. A debugger *is* notified of __fastfail exceptions first-chance,
+# so cdb can write the dump itself before the process would otherwise
+# terminate unseen. See eval/README.md's Windows section for the full
+# investigation (the same fix eval/run_eval.py's _run_until_crash_windows
+# uses).
 #
 # Usage:
 #   .\run-all.ps1            — run all examples
@@ -22,6 +33,35 @@ if (-not (Test-Path $outDir)) {
     exit 1
 }
 
+function Find-Cdb {
+    $cmd = Get-Command cdb.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    # Same search order as CDBSession.find_debugger_executable() in
+    # backends/cdb.py, so this script finds the same cdb.exe the MCP server
+    # (and eval/run_eval.py) would.
+    $candidates = @(
+        "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
+        "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe",
+        "C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe",
+        "C:\Program Files\Debugging Tools for Windows (x86)\cdb.exe",
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\cdbX64.exe"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\cdbX86.exe"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\cdbARM64.exe")
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return $c }
+    }
+    return $null
+}
+
+$cdb = Find-Cdb
+if (-not $cdb) {
+    Write-Error ("cdb.exe not found -- install WinDbg (winget install " +
+        "Microsoft.WinDbg) or run from a Developer Command Prompt with " +
+        "Debugging Tools for Windows on PATH.")
+    exit 1
+}
+
 New-Item -ItemType Directory -Path $dumpDir -Force | Out-Null
 
 $exes = Get-ChildItem -Path $outDir -Filter "*.exe" |
@@ -39,29 +79,24 @@ foreach ($exe in $exes) {
     Write-Host " Running: $($exe.Name)" -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Yellow
 
-    $before = @(Get-ChildItem -Path $dumpDir -Filter "*.dmp" -ErrorAction SilentlyContinue)
+    $dumpPath = Join-Path $dumpDir "$($exe.BaseName).dmp"
+    if (Test-Path $dumpPath) {
+        Remove-Item $dumpPath -Force
+    }
 
-    $proc = Start-Process -FilePath $exe.FullName `
-                          -WorkingDirectory $outDir `
-                          -PassThru `
-                          -NoNewWindow `
-                          -Wait
+    & $cdb -g -G -hd -c "g;.dump /ma `"$dumpPath`";q" $exe.FullName 2>&1 |
+        ForEach-Object { Write-Host "  $_" }
 
-    $exitCode = $proc.ExitCode
-
-    $after = @(Get-ChildItem -Path $dumpDir -Filter "*.dmp" -ErrorAction SilentlyContinue)
-    $newDumps = $after | Where-Object { $_.FullName -notin $before.FullName }
-
-    $dumpFile = if ($newDumps.Count -gt 0) { $newDumps[-1].Name } else { "(none)" }
+    $found = Test-Path $dumpPath
+    $dumpFile = if ($found) { Split-Path $dumpPath -Leaf } else { "(none)" }
 
     $results += [PSCustomObject]@{
         Example  = $exe.BaseName
-        ExitCode = $exitCode
         DumpFile = $dumpFile
     }
 
-    if ($newDumps.Count -gt 0) {
-        Write-Host "  -> Dump: $($newDumps[-1].FullName)" -ForegroundColor Green
+    if ($found) {
+        Write-Host "  -> Dump: $dumpPath" -ForegroundColor Green
     } else {
         Write-Host "  -> No dump file created" -ForegroundColor Red
     }

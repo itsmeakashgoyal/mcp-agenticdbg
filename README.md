@@ -247,13 +247,16 @@ results table to its job summary and as a build artifact. Latest results:
 |---|---|---|---|
 | GDB | Linux (`ubuntu-latest`) | 17/17 | 100% |
 | LLDB | macOS (`macos-latest`) | 16/16 | 100% |
-| CDB | Windows (`windows-latest`) | 9/16 | 70% |
+| CDB | Windows | 16/16 | 100% |
 
 \* Mean of signal/frame/source-location scoring over examples that actually
 reproduced a crash; non-reproductions are example- and allocator-specific
 (documented per-case, not counted as TriagePilot failures) — see
 [`eval/README.md`](eval/README.md) for the full per-example breakdown, root
-causes, and known gaps.
+causes, and known gaps. The Windows row was verified directly against a
+real Windows 11 machine (Visual Studio 2022's `cl.exe`, WinDbg's `cdb.exe`)
+rather than the `windows-latest` CI job at the time it was last updated —
+pending that job's next run to confirm it independently.
 
 ![Eval results by backend](docs/eval-results.svg)
 

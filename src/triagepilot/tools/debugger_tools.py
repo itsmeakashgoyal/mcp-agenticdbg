@@ -235,6 +235,17 @@ _SOURCE_LOOKUP_SKIP_DIR_NAMES = frozenset(
         ".mypy_cache",
         ".pytest_cache",
         "node_modules",
+        # Python's equivalent of node_modules -- vendored dependency source,
+        # not the user's own code. Without these, a generic function name
+        # shared with some dependency (confirmed live: "abort" also appears
+        # in a vendored mypyc runtime under .venv/) can rank a third-party
+        # match ahead of -- or instead of -- the real user-code frame
+        # several levels down the fallback chain never gets tried.
+        ".venv",
+        "venv",
+        "site-packages",
+        "dist-packages",
+        ".tox",
     }
 )
 
@@ -259,6 +270,68 @@ _SOURCE_EXTENSIONS = frozenset(
 _SYMBOL_NAME_RE = re.compile(r"^SYMBOL_NAME:\s+(\w+)!([A-Za-z0-9_:~]+)", re.MULTILINE)
 _MODULE_NAME_RE = re.compile(r"^MODULE_NAME:\s+(\w+)", re.MULTILINE)
 _STACK_FRAME_RE = re.compile(r"(\w+)!([A-Za-z0-9_:~]+)\+0x[0-9a-fA-F]+")
+
+# Windows system modules that can appear as a CDB frame's module -- never the
+# user's own code, so searching the repo for "a definition of the function
+# this frame is in" is always pointless, and for a common CRT/libc name that
+# also happens to be *called* or *mentioned* elsewhere in the user's own code
+# (confirmed live: "abort" -- both a real call site and a comment mentioning
+# it elsewhere in this repo's examples), actively misleading: it returns a
+# same-named but unrelated match instead of falling through to a real
+# user-code frame further down the stack.
+_CDB_SYSTEM_MODULES = frozenset(
+    {
+        "ntdll",
+        "kernel32",
+        "kernelbase",
+        "ucrtbase",
+        "ucrtbased",
+        "msvcrt",
+        "msvcrtd",
+        "vcruntime140",
+        "vcruntime140d",
+        "vcruntime140_1",
+        "combase",
+        "rpcrt4",
+        "advapi32",
+        "sechost",
+    }
+)
+
+# Well-known CRT/runtime function names that are essentially never
+# user-defined, only called -- the module-name check above doesn't catch
+# these when the CRT is statically linked (this repo's /MT builds): a frame
+# like "double_free!abort" attributes CRT code to the *user's own* module
+# name, not ucrtbase/msvcrt. Without this, a bare call site with leading
+# whitespace satisfies _find_function_in_repo's "return type prefix" pattern
+# just as well as a real definition (confirmed live: "    abort();" in
+# lock-order-inversion-deadlock.cpp matched a search for "abort" triggered
+# while locating source for a *different* example's faulting frame).
+# Mirrors the skip lists signature.py's _SKIP_FUNCTIONS and this module's
+# own _extract_gdb_functions() already use for the same reason on other
+# backends.
+_RUNTIME_FUNCTION_NAMES = frozenset(
+    {
+        "abort",
+        "raise",
+        "terminate",
+        "exit",
+        "_exit",
+        "quick_exit",
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "memcpy",
+        "memmove",
+        "memset",
+        "strcpy",
+        "strncpy",
+        "strcat",
+        "longjmp",
+        "_cxxthrowexception",
+    }
+)
 
 # GDB/LLDB "at file.cpp:42" patterns in backtraces
 _GDB_AT_RE = re.compile(
@@ -429,6 +502,44 @@ def _find_file_in_repo(
     return matches
 
 
+def _strip_comment(line: str, in_block_comment: bool) -> tuple[str, bool]:
+    """Best-effort strip C/C++ comments from *line* for function-search matching.
+
+    Not a real tokenizer (doesn't know about "//" or "/*" inside a string or
+    char literal), but good enough to stop a function name merely *mentioned*
+    in a comment from being mistaken for its definition. Confirmed live: a
+    comment ("fire abort()/SIGQUIT on a hung process") in
+    lock-order-inversion-deadlock.cpp false-matched a search for "abort" (the
+    faulting frame's library function) triggered while locating source for a
+    *different* example, and matches for a generic name like that are
+    otherwise indistinguishable from a real one-line definition.
+
+    Returns ``(cleaned_line, still_in_block_comment)`` -- the caller carries
+    the returned state into the next line for multi-line ``/* ... */`` blocks.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if in_block_comment:
+            end = line.find("*/", i)
+            if end == -1:
+                return "".join(result), True
+            in_block_comment = False
+            i = end + 2
+            continue
+        two = line[i : i + 2]
+        if two == "//":
+            break
+        if two == "/*":
+            i += 2
+            in_block_comment = True
+            continue
+        result.append(line[i])
+        i += 1
+    return "".join(result), in_block_comment
+
+
 def _find_function_in_repo(
     function_name: str,
     repo_path: str,
@@ -436,10 +547,22 @@ def _find_function_in_repo(
     budget: dict[str, float | int | bool] | None = None,
 ) -> list[tuple[str, int]]:
     """Search source files for a function definition."""
-    patterns = [
-        rf"^\s*[\w\s\*&:<>,]+\b{re.escape(function_name)}\s*\(",
-        rf"::{re.escape(function_name)}\s*\(",
-    ]
+    if function_name.startswith("~"):
+        # Destructor. The generic pattern below requires a `\b` immediately
+        # before the (escaped) name to end the "return type" prefix it
+        # consumes -- but `~` is a non-word character, so there's never a
+        # \w/\W transition between it and preceding whitespace for `\b` to
+        # anchor on, and a destructor defined inline in the class body
+        # ("~Foo() {", no "ClassName::" qualifier) has no return type to
+        # match there anyway. Confirmed live: CDB stack frames for
+        # exception-in-destructor-terminate.cpp's inline `~ScopedTransaction`
+        # never matched either of the patterns below.
+        patterns = [rf"(?:^|\s|::){re.escape(function_name)}\s*\("]
+    else:
+        patterns = [
+            rf"^\s*[\w\s\*&:<>,]+\b{re.escape(function_name)}\s*\(",
+            rf"::{re.escape(function_name)}\s*\(",
+        ]
     combined = re.compile("|".join(patterns), re.MULTILINE)
 
     matches: list[tuple[str, int]] = []
@@ -464,16 +587,33 @@ def _find_function_in_repo(
             if os.path.islink(filepath):
                 continue
             try:
+                in_block_comment = False
                 with open(filepath, encoding="utf-8", errors="replace") as fh:
                     for line_num, line in enumerate(fh, 1):
-                        if combined.search(line):
+                        cleaned, in_block_comment = _strip_comment(line, in_block_comment)
+                        if combined.search(cleaned):
                             matches.append((filepath, line_num))
             except OSError:
                 continue
 
     if module_hint and len(matches) > 1:
-        hint_lower = module_hint.lower()
-        matches.sort(key=lambda m: 0 if hint_lower in m[0].replace("\\", "/").lower() else 1)
+        # Strip -/_ before comparing: a PE/COFF module name can't contain a
+        # hyphen, so CDB reports MSVC-built "double-free.exe" as module
+        # "double_free" -- a plain substring check ("double_free" in
+        # ".../double-free.cpp") never matches, silently leaving the hint
+        # unused for exactly the repos (like this one) that name examples
+        # with hyphens. Confirmed live: without this, a generic function
+        # name defined in many files (e.g. every example's `main`) ranked
+        # double-free.cpp's own match below the first max_show=3 shown,
+        # so locate_faulting_source() never displayed it at all.
+        hint_norm = module_hint.lower().replace("-", "").replace("_", "")
+        matches.sort(
+            key=lambda m: (
+                0
+                if hint_norm in m[0].replace("\\", "/").lower().replace("-", "").replace("_", "")
+                else 1
+            )
+        )
 
     return matches
 
@@ -618,7 +758,11 @@ def locate_faulting_source(analysis_text: str, repo_path: str | None) -> str | N
 
     # ----- Level 2: CDB SYMBOL_NAME function search -----
     module_name, function_name = _parse_faulting_module_function(analysis_text)
-    if function_name:
+    if (
+        function_name
+        and function_name.lower() not in _RUNTIME_FUNCTION_NAMES
+        and (module_name or "").lower() not in _CDB_SYSTEM_MODULES
+    ):
         logger.info("Level 2: searching for function %s (module %s)", function_name, module_name)
         matches = _find_function_in_repo(function_name, repo_path, module_name, budget)
         if matches:
@@ -631,6 +775,10 @@ def locate_faulting_source(analysis_text: str, repo_path: str | None) -> str | N
     for frame_module, frame_func in stack_functions:
         if _is_budget_exhausted(budget):
             break
+        if frame_module.lower() in _CDB_SYSTEM_MODULES:
+            continue
+        if frame_func.lower() in _RUNTIME_FUNCTION_NAMES:
+            continue
         matches = _find_function_in_repo(frame_func, repo_path, frame_module, budget)
         if matches:
             return _format_function_matches(matches, frame_module, frame_func, "Stack Trace Search")

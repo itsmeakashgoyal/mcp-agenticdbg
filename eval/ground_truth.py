@@ -172,10 +172,13 @@ GROUND_TRUTH: list[CrashGroundTruth] = [
             "libmalloc keeps freed allocations mapped and reusable regardless of "
             "size, even at 8 MiB, so the padding trick never reproduced there. "
             "Session now defines its own operator new/delete backed directly by "
-            "mmap()/munmap(), bypassing the platform allocator entirely -- "
-            "confirmed 10/10 direct runs on macOS (arm64, macOS 15.7). Also "
-            "excluded from the Windows build entirely (raw POSIX pthreads, no "
-            "MSVC equivalent)."
+            "mmap()/munmap() (VirtualAlloc()/VirtualFree(MEM_DECOMMIT) on "
+            "Windows), bypassing the platform allocator entirely -- confirmed "
+            "10/10 direct runs on macOS (arm64, macOS 15.7). Used to be excluded "
+            "from the Windows build entirely (raw POSIX pthreads/sched_yield(), "
+            "no MSVC equivalent); ported to std::thread/std::this_thread::yield() "
+            "and confirmed reproducing reliably on real Windows 11 (real cl.exe, "
+            "real cdb.exe)."
         ),
     ),
     # --- New "advanced" examples ------------------------------------------

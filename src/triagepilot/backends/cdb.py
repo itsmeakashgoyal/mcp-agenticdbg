@@ -236,7 +236,19 @@ class CDBSession(DebuggerSession):
 
         def _try(label: str, cmd: str, cmd_timeout: int | None = None) -> None:
             try:
-                out = self.send_command(cmd, timeout=cmd_timeout or self.timeout)
+                # Pass cmd_timeout through as-is (don't substitute
+                # self.timeout for a bare None here): send_command() already
+                # knows to give "slow" commands (see SLOW_COMMAND_PREFIXES --
+                # "!analyze", "~*kb", "vertarget", ...) the more patient
+                # activity-based wait instead of a fixed ceiling, but only
+                # when it actually receives timeout=None. Pre-resolving None
+                # to self.timeout here silently defeated that path entirely:
+                # confirmed live that "!analyze -v" can legitimately take
+                # ~159s (mostly a first-use online WER bucket-ID lookup) and
+                # was hard-failing at the 90s ceiling every time, which in
+                # turn left the session in a state where every section after
+                # it also failed.
+                out = self.send_command(cmd, timeout=cmd_timeout)
                 if out:
                     sections.append(f"=== {label} ===")
                     sections.extend(out)

@@ -47,11 +47,11 @@
 
   <!-- Row 3: CDB / Windows -->
   <text x="24" y="222" class="label">CDB</text>
-  <text x="24" y="236" class="sublabel">Windows (windows-latest)</text>
+  <text x="24" y="236" class="sublabel">Windows</text>
   <rect x="190" y="214" width="360" height="22" fill="#f2f2f2" rx="4" />
-  <rect x="190" y="214" width="202" height="22" fill="#cf222e" rx="4" />
-  <text x="566" y="230" class="value" fill="#cf222e">9/16 reproduced</text>
-  <text x="566" y="246" class="sublabel">70% accuracy</text>
+  <rect x="190" y="214" width="360" height="22" fill="#2da44e" rx="4" />
+  <text x="566" y="230" class="value" fill="#2da44e">16/16 reproduced</text>
+  <text x="566" y="246" class="sublabel">100% accuracy</text>
 
   <text x="24" y="288" class="sublabel">Non-reproductions are example/allocator-specific (documented in eval/README.md), not TriagePilot defects.</text>
 </svg>

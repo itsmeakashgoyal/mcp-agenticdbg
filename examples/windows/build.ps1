@@ -22,18 +22,14 @@ $outDir     = Join-Path $buildDir  "out"
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $outDir   -Force | Out-Null
 
-# thread-uaf.cpp uses raw POSIX pthreads (<pthread.h>, <sched.h>,
-# pthread_create/pthread_join) for its watchdog/worker handshake -- there's
-# no MSVC-native equivalent, and porting it to std::thread would mean
-# rewriting the exact atomic handshake timing that makes the UAF reproduce
-# deterministically (see git history) without a real Windows box to verify
-# against. Every other example already uses portable std::thread/std::mutex
-# (see lock-order-inversion-deadlock.cpp, concurrent-vector-race.cpp,
-# detached-thread-dangling-stack.cpp) and builds fine here.
-$excluded = @("thread-uaf.cpp")
-
-$sources = Get-ChildItem -Path $commonDir -Filter "*.cpp" |
-    Where-Object { $excluded -notcontains $_.Name }
+# Every example builds on MSVC -- thread-uaf.cpp used to be excluded here
+# (raw POSIX pthreads, no MSVC-native equivalent) but now uses portable
+# std::thread/std::this_thread::yield(), same as lock-order-inversion-
+# deadlock.cpp, concurrent-vector-race.cpp, and detached-thread-dangling-
+# stack.cpp. heap-metadata-corruption.cpp also builds fine here -- it just
+# doesn't reproduce its crash reliably on Windows (see eval/README.md's
+# Windows section), which isn't a build-time concern.
+$sources = Get-ChildItem -Path $commonDir -Filter "*.cpp"
 if ($sources.Count -eq 0) {
     Write-Warning "No .cpp files found in $commonDir"
     exit 1

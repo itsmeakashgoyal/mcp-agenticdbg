@@ -17,15 +17,17 @@
  * (confirmed empirically -- even an 8 MiB malloc()/free() survives a stale
  * write untouched), so the padding trick doesn't reproduce there. Session
  * instead defines its own operator new/delete backed directly by
- * mmap()/munmap(), bypassing the platform allocator's heuristics entirely --
- * once `delete s` runs, the memory is unconditionally unmapped on every
- * POSIX platform.
+ * mmap()/munmap() (VirtualAlloc()/VirtualFree() on Windows), bypassing the
+ * platform allocator's heuristics entirely -- once `delete s` runs, the
+ * memory is unconditionally unmapped/decommitted on every platform.
  *
  * The watchdog and worker also synchronise through an explicit atomic
  * request counter (the same style concurrent-vector-race.cpp and
  * lock-order-inversion-deadlock.cpp use) instead of guessed usleep()
  * windows, so the watchdog always closes the session at the same point in
- * the worker's progress, regardless of scheduler timing.
+ * the worker's progress, regardless of scheduler timing. Uses portable
+ * std::thread/std::this_thread::yield() rather than raw POSIX
+ * pthreads/sched_yield(), so this builds under MSVC too.
  *
  * Complexity  : Two threads; the crash appears in a completely different
  *               thread from the one that called delete. The corrupted
@@ -36,7 +38,7 @@
  *   - `info threads` shows 2 threads; the crashing one is the worker
  *   - `thread apply all bt` reveals both stacks side-by-side
  *   - Worker stack: main → run_workers → process_request → session->record
- *   - Watchdog stack: already returned from pool->close / is in pthread_join
+ *   - Watchdog stack: already returned from pool->close / is in std::thread::join
  *   - `frame N; print s` in the worker frame shows the now-dangling pointer
  *   - Root cause: shared raw pointer with no ownership / no synchronisation
  *
@@ -47,12 +49,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <sched.h>
-#include <sys/mman.h>
 #include <atomic>
 #include <new>
+#include <thread>
 #include "crashdump.h"
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sched.h>
+#include <sys/mman.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Domain model
@@ -71,18 +79,29 @@ struct Session {
     int    metric_count;
     int    request_count;
 
-    // Backed directly by mmap/munmap instead of the platform malloc, so
-    // `delete s` unconditionally unmaps the memory -- see the file header's
+    // Backed directly by mmap/munmap (or VirtualAlloc/VirtualFree on
+    // Windows) instead of the platform malloc, so `delete s`
+    // unconditionally unmaps the memory -- see the file header's
     // "Reliability note" for why relying on malloc's own mmap-threshold
     // heuristic (as an earlier version of this demo did) isn't portable.
+    // Mirrors iterator-invalidation.cpp's DirectMapAllocator.
     static void *operator new(size_t size) {
+#if defined(_WIN32)
+        void *p = VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!p) throw std::bad_alloc();
+#else
         void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (p == MAP_FAILED) throw std::bad_alloc();
+#endif
         return p;
     }
     static void operator delete(void *p, size_t size) {
+#if defined(_WIN32)
+        VirtualFree(p, size, MEM_DECOMMIT);
+#else
         munmap(p, size);
+#endif
     }
 
     void record(const char *metric_name, double value) {
@@ -165,31 +184,26 @@ static void run_workers(Session *s, WorkerCtx *ctx) {
             // request #3 always runs after the session is freed, on every
             // run, regardless of scheduler timing.
             while (!ctx->session_closed.load(std::memory_order_acquire)) {
-                sched_yield();
+                std::this_thread::yield();
             }
         }
     }
 }
 
-void *worker_thread(void *arg) {
-    WorkerCtx *ctx = (WorkerCtx *)arg;
+void worker_thread(WorkerCtx *ctx) {
     run_workers(ctx->session, ctx);
-    return nullptr;
 }
 
-void *watchdog_thread(void *arg) {
-    WorkerCtx *ctx = (WorkerCtx *)arg;
-
+void watchdog_thread(WorkerCtx *ctx) {
     // Wait until exactly 2 requests have completed -- a real synchronisation
     // point instead of a guessed sleep duration, so the close always lands
     // between the 2nd and 3rd request regardless of scheduler timing.
     while (ctx->requests_done.load(std::memory_order_acquire) < 2) {
-        sched_yield();
+        std::this_thread::yield();
     }
 
     ctx->pool->close(ctx->session);  // session freed (and unmapped); worker's raw ptr now dangles
     ctx->session_closed.store(true, std::memory_order_release);  // release the worker
-    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,12 +219,11 @@ int main(void) {
     ctx.session = s;
     ctx.pool = &pool;
 
-    pthread_t wdog, worker;
-    pthread_create(&worker, nullptr, worker_thread,   &ctx);
-    pthread_create(&wdog,   nullptr, watchdog_thread, &ctx);
+    std::thread worker(worker_thread, &ctx);
+    std::thread wdog(watchdog_thread, &ctx);
 
-    pthread_join(worker, nullptr);
-    pthread_join(wdog,   nullptr);
+    worker.join();
+    wdog.join();
 
     printf("[main] done\n");
     return 0;

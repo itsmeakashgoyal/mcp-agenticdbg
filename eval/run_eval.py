@@ -61,9 +61,19 @@ SIGNAL_PATTERN = re.compile(r"\b(SIG[A-Z]+)\b")
 _PLATFORM_EXCLUSIONS: dict[str, tuple[str, set[str], str]] = {
     "win32": (
         "Windows",
-        {"thread-uaf"},
-        "raw POSIX pthreads, no MSVC equivalent -- already excluded from "
-        "examples/windows/build.ps1 for the same reason (see its comments)",
+        {"heap-metadata-corruption"},
+        "its chunk-header-stomp technique calls glibc's malloc_usable_size() and "
+        "depends on the tracking record landing immediately after the packet "
+        "buffer on that heap (see the HMC_GLIBC_TECHNIQUE guard in "
+        "heap-metadata-corruption.cpp, which is off outside Linux+glibc) -- "
+        "confirmed live on real Windows 11 (real cl.exe, real cdb.exe) that "
+        "without it the example just exits 0 every attempt: the underlying "
+        "off-by-one is real, but the MSVC CRT heap's chunk layout isn't "
+        "glibc's, and reverse-engineering a Windows-specific equivalent (NT "
+        "Heap/LFH chunk headers are cookie-obfuscated since Windows 8, unlike "
+        "glibc's plain-text header) is the same class of fragile, "
+        "version-specific problem that got this example excluded on macOS "
+        "below rather than attempted (see eval/README.md's Windows section)",
     ),
     "darwin": (
         "macOS",
@@ -328,61 +338,118 @@ def _run_until_crash_macos(binary: str, run_dir: str, max_attempts: int) -> Cras
     return CrashResult(False, None, None, diagnostic=_tail(last_output))
 
 
-# Windows exit codes that indicate a genuine crash reached crashdump.h's
-# SetUnhandledExceptionFilter and produced a dump, mapped to the nearest
-# POSIX-equivalent signal name so unmodified ground_truth.py entries
-# (written in terms of SIGSEGV/SIGABRT) still score correctly. This list
-# reflects the well-documented NTSTATUS for access violation; it is *not*
-# exhaustive -- a bare abort() call (the double-free/heap-corruption
-# examples' usual mechanism on glibc) does not raise a structured exception
-# on Windows at all by default and so never reaches this handler, meaning
-# those examples may legitimately report "not reproduced" here until that
-# gap is closed. See eval/README.md for the caveat this maps to.
-_WINDOWS_EXIT_CODE_TO_SIGNAL = {
-    0xC0000005: "SIGSEGV",  # STATUS_ACCESS_VIOLATION
+# NTSTATUS codes cdb's stop-reason line can report, mapped to the nearest
+# POSIX-equivalent signal so unmodified ground_truth.py entries (written in
+# terms of SIGSEGV/SIGABRT) score correctly. STATUS_HEAP_CORRUPTION and
+# STATUS_STACK_BUFFER_OVERRUN are both __fastfail codes (see this module's
+# docstring above and eval/README.md's Windows section) -- Windows' OS-level
+# equivalent of the glibc/libmalloc abort() chain double-free.cpp,
+# heap-corruption.cpp, etc. trigger on Linux/macOS. Confirmed live (real
+# Windows 11, real cdb 10.0.29617.1000): use-after-free reports c0000005,
+# double-free reports c0000374.
+_WINDOWS_NTSTATUS_TO_SIGNAL = {
+    "c0000005": "SIGSEGV",  # STATUS_ACCESS_VIOLATION
+    "c00000fd": "SIGSEGV",  # STATUS_STACK_OVERFLOW
+    "c0000374": "SIGABRT",  # STATUS_HEAP_CORRUPTION (__fastfail)
+    "c0000409": "SIGABRT",  # STATUS_STACK_BUFFER_OVERRUN (__fastfail)
+    # STATUS_BREAKPOINT. Ambiguous in general (an intentional __debugbreak()
+    # would report the same code), but none of these examples call that --
+    # confirmed live that concurrent-vector-race.cpp's genuine data race
+    # (four threads, one unlocked std::vector) can manifest as *either* a
+    # plain access violation *or* this, with !analyze -v's own
+    # Failure.Bucket reading "HEAP_CORRUPTION_ACTIONABLE_..._DOUBLE_FREE_
+    # 80000003_..." on the runs that hit it -- Windows' page-heap/heap-
+    # corruption-detection breaking in via a breakpoint exception rather
+    # than a __fastfail code, for what's fundamentally the same class of
+    # bug double-free.cpp/heap-corruption.cpp trigger.
+    "80000003": "SIGABRT",  # STATUS_BREAKPOINT (heap-corruption-detection break-in)
 }
 
 
 def _run_until_crash_windows(binary: str, run_dir: str, max_attempts: int) -> CrashResult:
-    """Run ``binary`` up to ``max_attempts`` times until a .dmp file appears.
+    """Run ``binary`` under cdb.exe up to ``max_attempts`` times until it writes a dump.
 
-    crashdump.h's Windows branch installs SetUnhandledExceptionFilter,
-    which writes a MiniDump to <exe-dir>\\dumps\\ rather than a POSIX core
-    file -- detect a crash by that file appearing instead of by exit-code
-    sign (Windows exit codes are unsigned NTSTATUS values, not negative
-    signal numbers).
+    Earlier versions of this function ran the binary directly and watched
+    <exe-dir>\\dumps\\ for the .dmp crashdump.h's own SetUnhandledExceptionFilter
+    handler writes. That catches a plain STATUS_ACCESS_VIOLATION fine, but
+    `double-free`, `heap-corruption`, `concurrent-vector-race`
+    (STATUS_HEAP_CORRUPTION) and the abort()-based
+    `exception-in-destructor-terminate` / `lock-order-inversion-deadlock`
+    (STATUS_STACK_BUFFER_OVERRUN) never reached it at all: both are Windows
+    `__fastfail` codes, which by design bypass normal SEH dispatch --
+    including a handler registered in the target process itself -- unless a
+    debugger is already attached, specifically so a corrupted-heap process
+    can't have its termination hijacked by its own (possibly also corrupted)
+    handler.
+
+    Running the target under `cdb.exe` itself sidesteps this the same way
+    `_run_until_crash_macos` runs under lldb instead of trusting a
+    self-installed handler: a debugger *is* notified of `__fastfail`
+    exceptions first-chance, even when a standalone process wouldn't be, so
+    cdb can write the dump itself and never has to reach crashdump.h's
+    handler at all. `-hd` keeps the process heap's debug-mode-under-a-debugger
+    behavior off, so heap-corruption detection timing matches an undebugged
+    run as closely as possible (see "Why does my program run differently
+    under the debugger?" for the NTDLL-level debug heap this avoids).
     """
-    exe_dir = os.path.dirname(os.path.abspath(binary))
-    dump_dir = os.path.join(exe_dir, "dumps")
+    cdb = _find_cdb()
+    if not cdb:
+        raise RuntimeError(
+            "cdb.exe not found -- run from a Developer Command Prompt with the "
+            "Windows SDK's Debugging Tools installed, or pass its directory on PATH"
+        )
 
     last_output = None
-    last_exit_code = None
-    for _attempt in range(max_attempts):
-        before = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
+    for attempt in range(max_attempts):
+        dump_path = os.path.join(run_dir, f"{os.path.basename(binary)}.{attempt}.dmp")
         proc = subprocess.run(
-            [binary],
+            [cdb, "-g", "-G", "-hd", "-c", f'g;.dump /ma "{dump_path}";q', binary],
             cwd=run_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=30,
+            timeout=45,
         )
         last_output = proc.stdout
-        last_exit_code = proc.returncode
-        after = set(glob.glob(os.path.join(dump_dir, "*.dmp")))
-        new_dumps = sorted(after - before, key=os.path.getmtime)
 
-        if new_dumps:
-            exit_code = proc.returncode & 0xFFFFFFFF
-            signal_name = _WINDOWS_EXIT_CODE_TO_SIGNAL.get(exit_code, f"EXIT_0x{exit_code:08X}")
-            return CrashResult(True, signal_name, new_dumps[-1])
+        # cdb's own stop-reason line (e.g. "... - code c0000374 (first
+        # chance)") is the closest analogue to crashdump.h's "Caught signal
+        # ..." print on the other platforms. Deliberately take the *last*
+        # "code XXXXXXXX" match, not the first: cdb's own startup chatter can
+        # print an earlier, unrelated code (observed: STATUS_BREAKPOINT
+        # 0x80000003 from the loader breakpoint cdb's -g flag auto-continues
+        # past) before the actual crash. This can't be the sole/authoritative
+        # signal check -- extract_crash_signature()'s CDB path returns
+        # Windows-native labels (e.g. "ACCESS_VIOLATION" from BUGCHECK_STR),
+        # not POSIX names, by design (see test_memory.py's
+        # test_extract_cdb_signature), so it never matches ground_truth.py's
+        # SIGSEGV/SIGABRT entries for this backend -- this NTSTATUS mapping
+        # is what actually makes signal_match succeed on Windows.
+        signal_name = None
+        code_matches = re.findall(r"-\s*code\s+([0-9a-fA-F]+)\b", proc.stdout or "")
+        if code_matches:
+            code = code_matches[-1].lower()
+            signal_name = _WINDOWS_NTSTATUS_TO_SIGNAL.get(code, f"EXIT_0x{code.upper()}")
 
-    diagnostic = (
-        f"exit_code=0x{last_exit_code & 0xFFFFFFFF:08X}" if last_exit_code is not None else None
-    )
-    if last_output:
-        diagnostic = f"{diagnostic}\n{_tail(last_output)}" if diagnostic else _tail(last_output)
-    return CrashResult(False, None, None, diagnostic=diagnostic)
+        if os.path.isfile(dump_path):
+            return CrashResult(True, signal_name, dump_path)
+
+    return CrashResult(False, None, None, diagnostic=_tail(last_output))
+
+
+def _find_cdb() -> str | None:
+    """Locate cdb.exe using the same search order the real backend uses.
+
+    Deliberately not just ``shutil.which("cdb")``: cdb.exe is usually
+    installed under the Windows SDK's Debugging Tools directory, which
+    doesn't put itself on PATH, and CDBSession.find_debugger_executable()
+    already knows those default install locations (see backends/cdb.py's
+    DEFAULT_CDB_PATHS) -- reusing it keeps this harness consistent with
+    what create_session(debugger_type="cdb") will find later for analysis.
+    """
+    from triagepilot.backends.cdb import CDBSession
+
+    return CDBSession.find_debugger_executable()
 
 
 def evaluate_example(
@@ -424,8 +491,12 @@ def evaluate_example(
             # handle the equivalent core/dump for the same example in well
             # under 30s. A generous ceiling only costs time on the (rare)
             # examples that actually need it; it can't make a
-            # faster-opening dump slower.
-            timeout=90,
+            # faster-opening dump slower. Also doubles as run_crash_analysis()'s
+            # default per-command timeout (e.g. for `lm`) -- confirmed live
+            # that "!analyze -v" alone can take ~159s (mostly a first-use
+            # online WER bucket-ID lookup), so this needs real headroom above
+            # that, not just above session-open time.
+            timeout=200,
         )
         try:
             crash_info = session.get_crash_info()
