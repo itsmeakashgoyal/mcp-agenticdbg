@@ -61,6 +61,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # windows-11-arm is GitHub's hosted Windows/ARM64 runner (GA, free
+        # on public repos) -- added as a single extra leg (not crossed with
+        # the python-version list above) to cover the win32+ARM64 marker in
+        # pyproject.toml's mcp pin (cryptography ships no win_arm64 wheel,
+        # so mcp must stay <1.20 there; see that file's comment). Pinned to
+        # 3.13 because that's the only Python actions/setup-python can get
+        # on this runner today -- it ships preinstalled on the image, and
+        # setup-python can't download win_arm64 builds for other versions
+        # (native ARM64 Python support there is still an open gap:
+        # https://github.com/actions/partner-runner-images/issues/85).
+        include:
+          - os: windows-11-arm
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v6
       # setup-uv publishes immutable releases and no longer moves floating
@@ -84,12 +97,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-11-arm: see the `test` job above for why ARM64 is covered.
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          # 3.13, not 3.12: it's the only version actions/setup-python can
+          # get on windows-11-arm (preinstalled on the image; setup-python
+          # can't download win_arm64 builds for other versions yet).
+          python-version: "3.13"
       # shell: bash works on windows-latest too (Git Bash ships on GitHub's
       # Windows runners), so every step below tees its combined
       # stdout/stderr into ci-logs/ with one consistent syntax across all
@@ -136,7 +153,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-11-arm: see the `test` job above for why ARM64 is covered.
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@v6
       # setup-uv publishes immutable releases and no longer moves floating
@@ -147,7 +165,9 @@ jobs:
           cache-suffix: verify-install-uv
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          # 3.13: see verify-install-pip above for why this differs from
+          # the 3.12 used elsewhere in this file.
+          python-version: "3.13"
       - name: Install (uv, no dev/extras -- matches README quick start)
         shell: bash
         run: |
