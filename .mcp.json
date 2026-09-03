@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "triagepilot": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "triagepilot"
+      ]
+    }
+  }
+}
